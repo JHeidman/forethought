@@ -5,28 +5,59 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
-export default function LoginPage() {
+export default function SignupPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
 
-  async function handleLogin(e: React.FormEvent) {
+  async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
     setError("");
 
+    if (password !== confirm) {
+      setError("Passwords don't match.");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+
+    setLoading(true);
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
 
     if (error) {
       setError(error.message);
       setLoading(false);
     } else {
-      router.push("/chat");
-      router.refresh();
+      setDone(true);
     }
+  }
+
+  if (done) {
+    return (
+      <div className="min-h-full flex items-center justify-center px-4">
+        <div className="w-full max-w-sm text-center">
+          <p className="text-4xl mb-4">📬</p>
+          <h2 className="text-xl font-bold text-green-400 mb-2">Check your email</h2>
+          <p className="text-gray-400 text-sm">
+            We sent a confirmation link to <span className="text-white">{email}</span>.
+            Click it to activate your account and meet Frankie.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -34,10 +65,10 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-green-400">⛳ ForeThought</h1>
-          <p className="text-gray-400 mt-2">Your caddy Frankie is waiting.</p>
+          <p className="text-gray-400 mt-2">Create your account</p>
         </div>
 
-        <form onSubmit={handleLogin} className="space-y-4">
+        <form onSubmit={handleSignup} className="space-y-4">
           <div>
             <label className="block text-sm text-gray-400 mb-1">Email</label>
             <input
@@ -57,26 +88,35 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-lg focus:outline-none focus:border-green-500"
+              placeholder="at least 8 characters"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Confirm Password</label>
+            <input
+              type="password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              required
+              className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-lg focus:outline-none focus:border-green-500"
               placeholder="••••••••"
             />
           </div>
 
-          {error && (
-            <p className="text-red-400 text-sm">{error}</p>
-          )}
+          {error && <p className="text-red-400 text-sm">{error}</p>}
 
           <button
             type="submit"
             disabled={loading}
             className="w-full rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 px-4 py-3 text-white font-semibold text-lg transition-colors"
           >
-            {loading ? "Signing in…" : "Sign In"}
+            {loading ? "Creating account…" : "Create Account"}
           </button>
 
           <p className="text-center text-sm text-gray-500">
-            Don&apos;t have an account?{" "}
-            <Link href="/signup" className="text-green-400 hover:underline">
-              Create one
+            Already have an account?{" "}
+            <Link href="/login" className="text-green-400 hover:underline">
+              Sign in
             </Link>
           </p>
         </form>
