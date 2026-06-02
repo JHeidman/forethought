@@ -182,23 +182,42 @@ export async function POST(req: NextRequest) {
     }
 
     // Build messages for Frankie
-    const apiMessages: { role: "user" | "assistant"; content: string }[] = [
-      ...history.map((m: { role: string; content: string }) => ({
-        role: m.role as "user" | "assistant",
+    // Build messages with cache_control on the history (stable context)
+    const historyMessages = history.map((m: { role: string; content: string }) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+    }));
+
+    const newMessage = isGreeting ? "hello" : message;
+
+    // Mark the last history message as cacheable — everything before the new
+    // message is stable and can be reused across calls in the same session
+    const apiMessages: Anthropic.MessageParam[] = [
+      ...historyMessages.slice(0, -1).map((m) => ({
+        role: m.role,
         content: m.content,
       })),
-      ...(isGreeting ? [] : [{ role: "user" as const, content: message }]),
+      ...(historyMessages.length > 0 ? [{
+        role: historyMessages[historyMessages.length - 1].role,
+        content: [{
+          type: "text" as const,
+          text: historyMessages[historyMessages.length - 1].content,
+          cache_control: { type: "ephemeral" as const },
+        }],
+      }] : []),
+      { role: "user" as const, content: newMessage },
     ];
-
-    // For greeting, send a minimal prompt to get Frankie's intro
-    if (isGreeting) {
-      apiMessages.push({ role: "user", content: "hello" });
-    }
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-5",
       max_tokens: 1024,
-      system: buildSystemPrompt(profile, isGreeting),
+      system: [
+        {
+          type: "text",
+          text: buildSystemPrompt(profile, isGreeting),
+          cache_control: { type: "ephemeral" },
+        },
+      ],
       messages: apiMessages,
     });
 
