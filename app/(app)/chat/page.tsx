@@ -41,7 +41,6 @@ export default function ChatPage() {
 
       const existingMessages = messagesResult.data ?? [];
       const profile = profileResult.data;
-      console.log("[chat init] messages:", existingMessages.length, "error:", messagesResult.error?.message);
 
       // Apply persona from profile immediately so header/voice are correct on return
       if (profile?.persona) {
@@ -87,8 +86,11 @@ export default function ChatPage() {
     init();
   }, []);
 
+  const isInitialLoad = useRef(true);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const behavior = isInitialLoad.current ? "auto" : "smooth";
+    isInitialLoad.current = false;
+    messagesEndRef.current?.scrollIntoView({ behavior });
   }, [messages]);
 
   async function speakText(text: string, voiceId?: string) {
