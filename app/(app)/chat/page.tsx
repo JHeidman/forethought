@@ -35,11 +35,11 @@ export default function ChatPage() {
       if (!user) { router.push("/login"); return; }
 
       const [messagesResult, profileResult] = await Promise.all([
-        supabase.from("messages").select("id, role, content").eq("user_id", user.id).order("created_at", { ascending: true }).limit(50),
+        supabase.from("messages").select("id, role, content").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
         supabase.from("profiles").select("name, handicap, home_course, persona").eq("id", user.id).single(),
       ]);
 
-      const existingMessages = messagesResult.data ?? [];
+      const existingMessages = (messagesResult.data ?? []).reverse();
       const profile = profileResult.data;
 
       // Apply persona from profile immediately so header/voice are correct on return
@@ -56,9 +56,7 @@ export default function ChatPage() {
       }
 
       if (existingMessages.length > 0) {
-        console.log("[chat] setting messages:", existingMessages.length, "first:", existingMessages[0]?.role);
         setMessages(existingMessages as Message[]);
-        console.log("[chat] setMessages called");
       } else {
         setAppState("thinking");
         try {
@@ -239,7 +237,6 @@ export default function ChatPage() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-        {/* DEBUG */}{typeof window !== "undefined" && console.log("[render] messages count:", messages.length)}
         {messages.map((msg) => (
           <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
             <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-base leading-relaxed whitespace-pre-wrap ${
