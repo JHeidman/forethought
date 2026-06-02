@@ -41,6 +41,7 @@ export default function ChatPage() {
 
       const existingMessages = messagesResult.data ?? [];
       const profile = profileResult.data;
+      console.log("[chat init] messages:", existingMessages.length, "error:", messagesResult.error?.message);
 
       // Apply persona from profile immediately so header/voice are correct on return
       if (profile?.persona) {
