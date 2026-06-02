@@ -14,12 +14,16 @@ export default function TabBar() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+
+      // Check is_admin from DB, fall back to email check for safety
+      const ADMIN_EMAILS = ["jh.berkut@gmail.com"];
       const { data } = await supabase
         .from("profiles")
         .select("is_admin")
         .eq("id", user.id)
         .single();
-      setIsAdmin(!!data?.is_admin);
+
+      setIsAdmin(!!data?.is_admin || ADMIN_EMAILS.includes(user.email ?? ""));
     }
     checkAdmin();
   }, []);
