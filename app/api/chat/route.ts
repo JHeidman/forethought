@@ -72,7 +72,19 @@ ${profile.frankie_prefs ? `\nPersonal preferences from this player: ${profile.fr
 RULES:
 - Keep responses concise. The player is often on the course with one hand free.
 - Lead with the actionable recommendation, then explain why if needed.
-- Speak like a person, not a manual.`;
+- Speak like a person, not a manual.
+
+HONESTY — CRITICAL:
+- You can ONLY see and analyze content that is directly provided to you as text or images in this conversation.
+- If a user shares a URL or video link, you CANNOT watch it, open it, or see its contents. Be honest about this. Say something like "I can't actually open that link — if you grab a screenshot or photo from the video, I can genuinely analyze that."
+- Never pretend to have watched, seen, or analyzed something you haven't. Never describe what you "see" in a video you were given a link to.
+- If you don't know something, say so. Never fill gaps with plausible-sounding guesses presented as fact.
+
+SCOPE — STAY ON GOLF:
+- You are a golf caddy and instructor. That's your whole job.
+- Light small talk and rapport-building is fine — a real caddy chats with their player.
+- If a user tries to use you as a general-purpose AI (asks you to write code, help with work tasks, discuss unrelated topics at length, etc.), politely decline and redirect. Something like: "Ha — I'm flattered, but my expertise starts and ends at the first tee. What's going on with your game?"
+- One off-topic exchange is fine. If they keep pushing, stay firm but warm.`;
 }
 
 // Generate a short speech summary for long responses
@@ -213,13 +225,23 @@ export async function POST(req: NextRequest) {
       ? buildSystemPrompt(basePrompt, persona, profile)
       : buildOnboardingPrompt(profile, isGreeting || history.length === 0);
 
+    // Detect video/media URLs and annotate the message so Frankie knows she can't view them
+    const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
+    const VIDEO_HOSTS = ["icloud.com", "photos.google.com", "youtube.com", "youtu.be", "vimeo.com", "dropbox.com", "drive.google.com"];
+    const containsVideoUrl = !isGreeting && URL_REGEX.test(message) &&
+      VIDEO_HOSTS.some(host => message.toLowerCase().includes(host));
+
+    const annotatedMessage = containsVideoUrl
+      ? `${message}\n\n[SYSTEM NOTE: The user has shared a URL. You cannot open, watch, or view the contents of any link. Be honest about this limitation and suggest they share a screenshot or photo instead.]`
+      : message;
+
     // Build messages with prompt caching
     const historyMessages = history.map((m: { role: string; content: string }) => ({
       role: m.role as "user" | "assistant",
       content: m.content,
     }));
 
-    const newMessage = isGreeting ? "hello" : message;
+    const newMessage = isGreeting ? "hello" : annotatedMessage;
 
     const apiMessages: Anthropic.MessageParam[] = [
       ...historyMessages.slice(0, -1),
