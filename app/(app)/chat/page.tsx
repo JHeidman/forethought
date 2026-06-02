@@ -56,7 +56,9 @@ export default function ChatPage() {
       }
 
       if (existingMessages.length > 0) {
+        console.log("[chat] setting messages:", existingMessages.length, "first:", existingMessages[0]?.role);
         setMessages(existingMessages as Message[]);
+        console.log("[chat] setMessages called");
       } else {
         setAppState("thinking");
         try {
@@ -237,6 +239,7 @@ export default function ChatPage() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        {/* DEBUG */}{typeof window !== "undefined" && console.log("[render] messages count:", messages.length)}
         {messages.map((msg) => (
           <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
             <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-base leading-relaxed whitespace-pre-wrap ${
