@@ -52,8 +52,8 @@ test.describe("Chat", () => {
     await expect(page.locator("text=Your AI caddy")).toBeVisible();
   });
 
-  test("Settings icon is visible", async ({ page }) => {
-    await expect(page.locator('a[href="/settings"]')).toBeVisible();
+  test("Profile icon is visible", async ({ page }) => {
+    await expect(page.locator('a[href="/profile"]')).toBeVisible();
   });
 
   test("Voice/Text toggle is visible", async ({ page }) => {
@@ -75,20 +75,25 @@ test.describe("Chat", () => {
   });
 });
 
-test.describe("Settings", () => {
+test.describe("Profile", () => {
   test.beforeEach(async ({ page }) => {
     if (!TEST_PASSWORD) test.skip();
     await login(page);
   });
 
-  test("Settings page loads", async ({ page }) => {
-    await page.goto(`${BASE_URL}/settings`);
+  test("Profile page loads", async ({ page }) => {
+    await page.goto(`${BASE_URL}/profile`);
     await expect(page.locator("text=Your Profile")).toBeVisible();
   });
 
-  test("Profile fields are pre-filled", async ({ page }) => {
+  test("Persona selector is visible", async ({ page }) => {
+    await page.goto(`${BASE_URL}/profile`);
+    await expect(page.locator("text=Frankie")).toBeVisible();
+    await expect(page.locator("text=Coach")).toBeVisible();
+  });
+
+  test("Settings redirects to profile", async ({ page }) => {
     await page.goto(`${BASE_URL}/settings`);
-    const nameInput = page.locator('input[placeholder="Jeff"]');
-    await expect(nameInput).not.toHaveValue("");
+    await expect(page).toHaveURL(`${BASE_URL}/profile`);
   });
 });

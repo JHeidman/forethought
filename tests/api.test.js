@@ -15,7 +15,7 @@ env.split("\n").forEach((line) => {
 });
 
 const BASE_URL = process.env.TEST_URL || "http://localhost:3000";
-const TEST_EMAIL = process.env.TEST_EMAIL || "jheidman@northteq.com";
+const TEST_EMAIL = process.env.TEST_EMAIL || "jh.berkut+test@gmail.com";
 const TEST_PASSWORD = process.env.TEST_PASSWORD || "";
 
 let sessionCookie = "";
@@ -67,22 +67,32 @@ async function login() {
     return false;
   }
 
-  const { createClient } = require("@supabase/supabase-js");
-  const sb = createClient(
+  const { createBrowserClient } = require("@supabase/ssr");
+
+  // Use a mock cookie store to capture whatever cookies @supabase/ssr sets
+  const cookieStore = {};
+  const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    {
+      cookies: {
+        getAll: () => Object.entries(cookieStore).map(([name, value]) => ({ name, value })),
+        setAll: (cookies) => cookies.forEach(({ name, value }) => { cookieStore[name] = value; }),
+      },
+    }
   );
-  const { data, error } = await sb.auth.signInWithPassword({
+
+  const { error } = await supabase.auth.signInWithPassword({
     email: TEST_EMAIL,
     password: TEST_PASSWORD,
   });
+
   if (error) throw new Error(`Login failed: ${error.message}`);
 
-  // Store access token to use as cookie
-  sessionCookie = `sb-mazfnbcbaxvjkhguffni-auth-token=${JSON.stringify({
-    access_token: data.session.access_token,
-    refresh_token: data.session.refresh_token,
-  })}`;
+  // Build cookie header from all captured cookies
+  sessionCookie = Object.entries(cookieStore)
+    .map(([name, value]) => `${name}=${encodeURIComponent(value)}`)
+    .join("; ");
 
   return true;
 }
