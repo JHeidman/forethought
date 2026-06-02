@@ -22,6 +22,8 @@ function isProfileComplete(profile: Record<string, string | null>) {
   return !!(profile.name && profile.handicap && profile.home_course);
 }
 
+const SPEECH_THRESHOLD = 300; // characters — responses shorter than this are spoken as-is
+
 function buildOnboardingPrompt(profile: {
   name?: string | null;
   handicap?: string | null;
@@ -42,11 +44,7 @@ ${isFirstMessage
     ? "Start by introducing yourself in one sentence, then ask for their name."
     : `Ask for the next missing piece of information: ${needed[0]}. Do not introduce yourself — that already happened.`}
 
-Keep it casual and warm. One question at a time. No lists.
-
-IMPORTANT — always respond in this exact JSON format:
-{"speech": "<your response>", "reply": "<your response>"}
-Both fields should be identical during onboarding since responses are short.`;
+Keep it casual and warm. One question at a time. No lists.`;
 }
 
 function buildSystemPrompt(
@@ -71,14 +69,25 @@ Player profile:
 - Notes about their game: ${profile.player_notes || "none yet"}
 ${profile.frankie_prefs ? `\nPersonal preferences from this player: ${profile.frankie_prefs}` : ""}
 
-RESPONSE FORMAT — CRITICAL:
-You must ALWAYS respond with valid JSON in exactly this format:
-{"speech": "...", "reply": "..."}
+RULES:
+- Keep responses concise. The player is often on the course with one hand free.
+- Lead with the actionable recommendation, then explain why if needed.
+- Speak like a person, not a manual.`;
+}
 
-- "reply": Your full response. Can be as detailed as needed. This is shown as text in the chat.
-- "speech": A SHORT version for text-to-speech. Max 2 sentences. If reply is already short, speech can match it. If reply is a long practice plan or list, speech should summarize it conversationally (e.g. "Alright, I've written up a plan below — start with wedges, 10 balls, just getting loose.").
-
-Never include anything outside the JSON. No markdown fences around it.`;
+// Generate a short speech summary for long responses
+async function generateSpeech(anthropic: Anthropic, fullReply: string): Promise<string> {
+  try {
+    const result = await anthropic.messages.create({
+      model: "claude-sonnet-4-5",
+      max_tokens: 100,
+      system: "You summarize golf caddy responses into 1-2 short spoken sentences for text-to-speech. Be conversational, natural, and lead with the key point. No lists, no markdown.",
+      messages: [{ role: "user", content: `Summarize this for speech (1-2 sentences max):\n\n${fullReply}` }],
+    });
+    return result.content[0].type === "text" ? result.content[0].text.trim() : fullReply;
+  } catch {
+    return fullReply;
+  }
 }
 
 // Extract profile fields from conversation
@@ -104,21 +113,6 @@ Return only valid JSON. Example: {"name": "Jeff", "handicap": "39", "home_course
   } catch (err) {
     console.error("Profile extraction error:", err);
     return {};
-  }
-}
-
-// Parse Frankie's JSON response safely
-function parseResponse(raw: string): { speech: string; reply: string } {
-  try {
-    const cleaned = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
-    const parsed = JSON.parse(cleaned);
-    return {
-      speech: parsed.speech || parsed.reply || raw,
-      reply: parsed.reply || parsed.speech || raw,
-    };
-  } catch {
-    // Fallback if Claude didn't follow the JSON format
-    return { speech: raw, reply: raw };
   }
 }
 
@@ -285,21 +279,20 @@ export async function POST(req: NextRequest) {
           ],
         });
 
-        const rawFollowUp = followUp.content.find((b) => b.type === "text")?.type === "text"
+        reply = followUp.content.find((b) => b.type === "text")?.type === "text"
           ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
           : "";
-        const parsed = parseResponse(rawFollowUp);
-        reply = parsed.reply;
-        speech = parsed.speech;
       }
     } else {
-      const rawReply = response.content.find((b) => b.type === "text")?.type === "text"
+      reply = response.content.find((b) => b.type === "text")?.type === "text"
         ? (response.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
         : "";
-      const parsed = parseResponse(rawReply);
-      reply = parsed.reply;
-      speech = parsed.speech;
     }
+
+    // Generate short speech version if reply is long; otherwise speak it as-is
+    speech = reply.length > SPEECH_THRESHOLD
+      ? await generateSpeech(anthropic, reply)
+      : reply;
 
     // Save Frankie's reply
     await supabase.from("messages").insert({ user_id: user.id, role: "assistant", content: reply });

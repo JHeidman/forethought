@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
 type Message = {
@@ -42,6 +41,19 @@ export default function ChatPage() {
 
       const existingMessages = messagesResult.data ?? [];
       const profile = profileResult.data;
+
+      // Apply persona from profile immediately so header/voice are correct on return
+      if (profile?.persona) {
+        const PERSONA_NAMES: Record<string, string> = { frankie: "Frankie", sam: "Sam", coach: "Coach", ace: "Ace" };
+        const PERSONA_VOICES: Record<string, string> = {
+          frankie: "FGY2WhTYpPnrIDTdsKH5",
+          sam: "EXAVITQu4vr4xnSDxMaL",
+          coach: "JBFqnCBsd6RMkjVDRZzb",
+          ace: "CwhRBWXzGAHq8TQ4Fs17",
+        };
+        setPersonaName(PERSONA_NAMES[profile.persona] ?? "Frankie");
+        currentVoiceIdRef.current = PERSONA_VOICES[profile.persona] ?? "FGY2WhTYpPnrIDTdsKH5";
+      }
 
       if (existingMessages.length > 0) {
         setMessages(existingMessages as Message[]);
@@ -212,20 +224,12 @@ export default function ChatPage() {
           <h1 className="font-bold text-green-400 text-lg">⛳ {personaName}</h1>
           <p className="text-xs text-gray-500">Your AI caddy</p>
         </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setVoiceMode((v) => !v)}
-            className={`text-xs px-3 py-1 rounded-full border transition-colors ${voiceMode ? "border-green-500 text-green-400" : "border-gray-700 text-gray-500"}`}
-          >
-            {voiceMode ? "🎙 Voice" : "⌨️ Text"}
-          </button>
-          <Link href="/profile" className="p-2 text-gray-400 hover:text-white transition-colors">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </Link>
-        </div>
+        <button
+          onClick={() => setVoiceMode((v) => !v)}
+          className={`text-xs px-3 py-1 rounded-full border transition-colors ${voiceMode ? "border-green-500 text-green-400" : "border-gray-700 text-gray-500"}`}
+        >
+          {voiceMode ? "🎙 Voice" : "⌨️ Text"}
+        </button>
       </header>
 
       {/* Messages */}
@@ -291,10 +295,7 @@ export default function ChatPage() {
             </button>
           )}
 
-          <div className="flex gap-4 items-center">
-            <Link href="/plans" className="text-xs text-gray-600 hover:text-gray-400">📋 Plans</Link>
-            <button onClick={() => setVoiceMode(false)} className="text-xs text-gray-600 hover:text-gray-400">Switch to text</button>
-          </div>
+          <button onClick={() => setVoiceMode(false)} className="text-xs text-gray-600 hover:text-gray-400">Switch to text</button>
         </div>
       ) : (
         /* Text Mode */
