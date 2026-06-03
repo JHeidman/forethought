@@ -169,6 +169,7 @@ export default function ChatPage() {
       if (data.reply) {
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "assistant", content: data.reply }]);
         await speakText(data.speech || data.reply, data.voiceId);
+        setAppState("idle"); // ensure idle even if muted or speakText returned early
       } else {
         setAppState("idle");
       }
