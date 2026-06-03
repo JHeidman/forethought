@@ -38,7 +38,9 @@ export default function SignupPage() {
     });
     const codeData = await codeRes.json();
     if (!codeData.valid) {
-      setError("Invalid invite code. Contact Jeff to get access.");
+      setError(codeData.reason === "This invite code has expired"
+        ? "That invite code has expired. Ask Jeff for a new one."
+        : "Invalid invite code. Contact Jeff to get access.");
       setLoading(false);
       return;
     }

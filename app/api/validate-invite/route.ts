@@ -14,10 +14,15 @@ function getEnvVar(name: string): string {
   return "";
 }
 
+type InviteCode = {
+  code: string;
+  expiresAt?: string | null; // ISO date string, null = never expires
+};
+
 export async function POST(req: NextRequest) {
   try {
     const { code } = await req.json();
-    if (!code) return NextResponse.json({ valid: false });
+    if (!code) return NextResponse.json({ valid: false, reason: "No code provided" });
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -31,14 +36,22 @@ export async function POST(req: NextRequest) {
       .eq("key", "invite_codes")
       .single();
 
-    if (!data?.value) return NextResponse.json({ valid: false });
+    if (!data?.value) return NextResponse.json({ valid: false, reason: "No codes configured" });
 
-    const codes: string[] = JSON.parse(data.value);
-    const valid = codes.map(c => c.toUpperCase()).includes(code.toUpperCase());
+    const codes: InviteCode[] = JSON.parse(data.value);
+    const now = new Date();
 
-    return NextResponse.json({ valid });
+    const match = codes.find(c => c.code.toUpperCase() === code.toUpperCase());
+
+    if (!match) return NextResponse.json({ valid: false, reason: "Invalid code" });
+
+    if (match.expiresAt && new Date(match.expiresAt) < now) {
+      return NextResponse.json({ valid: false, reason: "This invite code has expired" });
+    }
+
+    return NextResponse.json({ valid: true });
   } catch (err) {
     console.error("Invite validation error:", err);
-    return NextResponse.json({ valid: false });
+    return NextResponse.json({ valid: false, reason: "Something went wrong" });
   }
 }

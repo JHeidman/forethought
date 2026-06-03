@@ -44,8 +44,10 @@ export default function AdminPage() {
   const [saved, setSaved] = useState(false);
 
   // Codes tab
-  const [codes, setCodes] = useState<string[]>([]);
+  type InviteCode = { code: string; expiresAt?: string | null };
+  const [codes, setCodes] = useState<InviteCode[]>([]);
   const [newCode, setNewCode] = useState("");
+  const [newExpiry, setNewExpiry] = useState("");
   const [codesSaving, setCodesSaving] = useState(false);
   const [codesSaved, setCodesSaved] = useState(false);
 
@@ -104,14 +106,20 @@ export default function AdminPage() {
 
   function addCode() {
     const code = newCode.trim().toUpperCase();
-    if (code && !codes.includes(code)) {
-      setCodes([...codes, code]);
+    if (code && !codes.find(c => c.code === code)) {
+      setCodes([...codes, { code, expiresAt: newExpiry || null }]);
       setNewCode("");
+      setNewExpiry("");
     }
   }
 
   function removeCode(code: string) {
-    setCodes(codes.filter(c => c !== code));
+    setCodes(codes.filter(c => c.code !== code));
+  }
+
+  function isExpired(expiresAt?: string | null) {
+    if (!expiresAt) return false;
+    return new Date(expiresAt) < new Date();
   }
 
   function formatDate(iso: string | null) {
@@ -214,26 +222,45 @@ export default function AdminPage() {
             <p className="text-sm text-gray-400">Invite codes required to create an account. Share these with testers.</p>
 
             <div className="space-y-2">
-              {codes.map(code => (
-                <div key={code} className="flex items-center justify-between bg-gray-800 rounded-xl px-4 py-3 border border-gray-700">
-                  <span className="font-mono text-green-400 tracking-widest text-sm">{code}</span>
-                  <button onClick={() => removeCode(code)} className="text-xs text-red-400 hover:text-red-300">Remove</button>
+              {codes.map(c => (
+                <div key={c.code} className={`flex items-center justify-between bg-gray-800 rounded-xl px-4 py-3 border ${isExpired(c.expiresAt) ? "border-red-800 opacity-60" : "border-gray-700"}`}>
+                  <div>
+                    <span className={`font-mono tracking-widest text-sm ${isExpired(c.expiresAt) ? "text-red-400 line-through" : "text-green-400"}`}>{c.code}</span>
+                    {c.expiresAt && (
+                      <p className={`text-xs mt-0.5 ${isExpired(c.expiresAt) ? "text-red-500" : "text-gray-500"}`}>
+                        {isExpired(c.expiresAt) ? "Expired" : "Expires"} {new Date(c.expiresAt).toLocaleDateString()}
+                      </p>
+                    )}
+                    {!c.expiresAt && <p className="text-xs text-gray-600 mt-0.5">No expiry</p>}
+                  </div>
+                  <button onClick={() => removeCode(c.code)} className="text-xs text-red-400 hover:text-red-300">Remove</button>
                 </div>
               ))}
               {codes.length === 0 && <p className="text-gray-600 text-sm">No codes yet.</p>}
             </div>
 
-            <div className="flex gap-2">
-              <input
-                value={newCode}
-                onChange={(e) => setNewCode(e.target.value.toUpperCase())}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCode(); } }}
-                placeholder="NEW CODE"
-                className="flex-1 rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white font-mono tracking-widest uppercase focus:outline-none focus:border-green-500"
-              />
-              <button onClick={addCode} className="rounded-xl bg-gray-700 hover:bg-gray-600 px-4 py-3 text-white font-medium">
-                Add
-              </button>
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <input
+                  value={newCode}
+                  onChange={(e) => setNewCode(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCode(); } }}
+                  placeholder="NEW CODE"
+                  className="flex-1 rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white font-mono tracking-widest uppercase focus:outline-none focus:border-green-500"
+                />
+                <button onClick={addCode} className="rounded-xl bg-gray-700 hover:bg-gray-600 px-4 py-3 text-white font-medium">
+                  Add
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-500 whitespace-nowrap">Expires on (optional):</label>
+                <input
+                  type="date"
+                  value={newExpiry}
+                  onChange={(e) => setNewExpiry(e.target.value)}
+                  className="flex-1 rounded-xl bg-gray-800 border border-gray-700 px-3 py-2 text-white text-sm focus:outline-none focus:border-green-500"
+                />
+              </div>
             </div>
 
             <button onClick={saveCodes} disabled={codesSaving}
