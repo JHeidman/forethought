@@ -19,6 +19,12 @@ export default function ChatPage() {
   const [appState, setAppState] = useState<AppState>("idle");
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
+  const [muted, setMuted] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("frankieMuted") === "true";
+    }
+    return false;
+  });
   const [personaName, setPersonaName] = useState("Frankie");
   const [planSavedToast, setPlanSavedToast] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -93,7 +99,19 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, [messages]);
 
+  function toggleMute() {
+    const next = !muted;
+    setMuted(next);
+    localStorage.setItem("frankieMuted", String(next));
+    if (next && audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+      setAppState("idle");
+    }
+  }
+
   async function speakText(text: string, voiceId?: string) {
+    if (muted) return;
     try {
       if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
       setAppState("speaking");
@@ -232,6 +250,22 @@ export default function ChatPage() {
           className={`text-xs px-3 py-1 rounded-full border transition-colors ${voiceMode ? "border-green-500 text-green-400" : "border-gray-700 text-gray-500"}`}
         >
           {voiceMode ? "🎙 Voice" : "⌨️ Text"}
+        </button>
+        <button
+          onClick={toggleMute}
+          title={muted ? "Unmute Frankie" : "Mute Frankie"}
+          className={`p-2 rounded-full transition-colors ${muted ? "text-red-400 hover:text-red-300" : "text-gray-400 hover:text-white"}`}
+        >
+          {muted ? (
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M12 6v12m-3.536-9.536a5 5 0 000 7.072M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+            </svg>
+          )}
         </button>
       </header>
 
