@@ -10,6 +10,7 @@ export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
@@ -28,6 +29,20 @@ export default function SignupPage() {
     }
 
     setLoading(true);
+
+    // Validate invite code via API
+    const codeRes = await fetch("/api/validate-invite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: inviteCode.trim().toUpperCase() }),
+    });
+    const codeData = await codeRes.json();
+    if (!codeData.valid) {
+      setError("Invalid invite code. Contact Jeff to get access.");
+      setLoading(false);
+      return;
+    }
+
     const supabase = createClient();
     const { error } = await supabase.auth.signUp({
       email,
@@ -53,7 +68,7 @@ export default function SignupPage() {
           <h2 className="text-xl font-bold text-green-400 mb-2">Check your email</h2>
           <p className="text-gray-400 text-sm">
             We sent a confirmation link to <span className="text-white">{email}</span>.
-            Click it to activate your account and meet Frankie.
+            Click it to activate your account and meet your caddy.
           </p>
         </div>
       </div>
@@ -69,6 +84,18 @@ export default function SignupPage() {
         </div>
 
         <form onSubmit={handleSignup} className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Invite Code</label>
+            <input
+              type="text"
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+              required
+              className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-lg focus:outline-none focus:border-green-500 uppercase tracking-widest"
+              placeholder="XXXXXXXX"
+              autoCapitalize="characters"
+            />
+          </div>
           <div>
             <label className="block text-sm text-gray-400 mb-1">Email</label>
             <input
