@@ -308,31 +308,47 @@ export async function POST(req: NextRequest) {
 
     const anthropic = new Anthropic({ apiKey: getEnvVar("ANTHROPIC_API_KEY") });
 
-    // Extract profile fields from conversation (always, not just during onboarding)
-    if (!isGreeting) {
-      const conversationText = [
-        ...history.map((m: { role: string; content: string }) => `${m.role}: ${m.content}`),
-        `user: ${message}`,
-      ].join("\n");
+    // Run profile extraction and topic summary in parallel with each other
+    // but BEFORE the main Claude call so we have fresh profile data
+    const conversationText = !isGreeting ? [
+      ...history.map((m: { role: string; content: string }) => `${m.role}: ${m.content}`),
+      `user: ${message}`,
+    ].join("\n") : "";
 
-      const extracted = await extractProfile(anthropic, conversationText, {
-        name: profile.name ?? null,
-        handicap: profile.handicap ?? null,
-        home_course: profile.home_course ?? null,
-        gender: profile.gender ?? null,
-        age_bracket: profile.age_bracket ?? null,
-      });
+    const isReturningUser = isGreeting && messageCount > 0 && isProfileComplete(profile as Record<string, string | null>);
 
+    // Only extract profile if something might have changed (skip during greetings)
+    const needsExtraction = !isGreeting && (
+      !isProfileComplete(profile as Record<string, string | null>) ||
+      !profile.gender ||
+      !profile.age_bracket
+    );
+
+    const [extractedProfile, recentTopics] = await Promise.all([
+      needsExtraction
+        ? extractProfile(anthropic, conversationText, {
+            name: profile.name ?? null,
+            handicap: profile.handicap ?? null,
+            home_course: profile.home_course ?? null,
+            gender: profile.gender ?? null,
+            age_bracket: profile.age_bracket ?? null,
+          })
+        : Promise.resolve({}),
+      isReturningUser && history.length > 0
+        ? summarizeRecentTopics(anthropic, history)
+        : Promise.resolve(""),
+    ]);
+
+    if (needsExtraction && Object.keys(extractedProfile).length > 0) {
       const updated: Record<string, string | null> = {
-        name: extracted.name || profile.name || null,
-        handicap: extracted.handicap || profile.handicap || null,
-        home_course: extracted.home_course || profile.home_course || null,
-        gender: extracted.gender || profile.gender || null,
-        age_bracket: extracted.age_bracket || profile.age_bracket || null,
+        name: (extractedProfile as Record<string, string>).name || profile.name || null,
+        handicap: (extractedProfile as Record<string, string>).handicap || profile.handicap || null,
+        home_course: (extractedProfile as Record<string, string>).home_course || profile.home_course || null,
+        gender: (extractedProfile as Record<string, string>).gender || profile.gender || null,
+        age_bracket: (extractedProfile as Record<string, string>).age_bracket || profile.age_bracket || null,
       };
 
       const hasChanges = Object.keys(updated).some(k => updated[k] !== (profile as Record<string, string | null>)[k]);
-
       if (hasChanges) {
         const { error: upsertError } = await supabase.from("profiles").upsert({
           id: user.id,
@@ -347,14 +363,11 @@ export async function POST(req: NextRequest) {
         profile = { ...profile, ...updated };
       }
 
-      // Seed clubs if we have enough info and haven't done it yet
+      // Seed clubs if we now have enough info
       if (!profile.clubs_seeded && profile.handicap && clubs.length === 0) {
         const gender = (profile.gender as Gender) || "male";
         const age = (profile.age_bracket as AgeGroup) || "30s";
-        const clubsToInsert = seedClubs(profile.handicap, gender, age).map(c => ({
-          ...c,
-          user_id: user.id,
-        }));
+        const clubsToInsert = seedClubs(profile.handicap, gender, age).map(c => ({ ...c, user_id: user.id }));
         const { error: clubsError } = await supabase.from("clubs").insert(clubsToInsert);
         if (!clubsError) {
           await supabase.from("profiles").update({ clubs_seeded: true }).eq("id", user.id);
@@ -366,13 +379,6 @@ export async function POST(req: NextRequest) {
           }));
         }
       }
-    }
-
-    // For returning user greetings, summarize recent topics
-    let recentTopics = "";
-    const isReturningUser = isGreeting && messageCount > 0 && isProfileComplete(profile as Record<string, string | null>);
-    if (isReturningUser && history.length > 0) {
-      recentTopics = await summarizeRecentTopics(anthropic, history);
     }
 
     // Determine what profile info is still missing
@@ -479,9 +485,14 @@ export async function POST(req: NextRequest) {
         : "";
     }
 
-    speech = reply.length > SPEECH_THRESHOLD
-      ? await generateSpeech(anthropic, reply)
-      : reply;
+    // Generate speech version without an extra API call:
+    // Short replies → speak as-is. Long replies → speak first 2 sentences only.
+    if (reply.length <= SPEECH_THRESHOLD) {
+      speech = reply;
+    } else {
+      const sentences = reply.replace(/\n+/g, " ").match(/[^.!?]+[.!?]+/g) ?? [];
+      speech = sentences.slice(0, 2).join(" ").trim() || reply.substring(0, SPEECH_THRESHOLD);
+    }
 
     await supabase.from("messages").insert({ user_id: user.id, role: "assistant", content: reply });
 
