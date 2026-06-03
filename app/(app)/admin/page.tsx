@@ -219,23 +219,49 @@ export default function AdminPage() {
         {/* Codes Tab */}
         {tab === "codes" && (
           <div className="p-4 space-y-4">
-            <p className="text-sm text-gray-400">Invite codes required to create an account. Share these with testers.</p>
+            <p className="text-sm text-gray-400">Each code generates a unique invite link. Share the link — the code is embedded and users don&apos;t need to type it.</p>
 
-            <div className="space-y-2">
-              {codes.map(c => (
-                <div key={c.code} className={`flex items-center justify-between bg-gray-800 rounded-xl px-4 py-3 border ${isExpired(c.expiresAt) ? "border-red-800 opacity-60" : "border-gray-700"}`}>
-                  <div>
-                    <span className={`font-mono tracking-widest text-sm ${isExpired(c.expiresAt) ? "text-red-400 line-through" : "text-green-400"}`}>{c.code}</span>
-                    {c.expiresAt && (
-                      <p className={`text-xs mt-0.5 ${isExpired(c.expiresAt) ? "text-red-500" : "text-gray-500"}`}>
-                        {isExpired(c.expiresAt) ? "Expired" : "Expires"} {new Date(c.expiresAt).toLocaleDateString()}
-                      </p>
+            <div className="space-y-4">
+              {codes.map(c => {
+                const inviteUrl = `https://forethought-7s4a.vercel.app/signup?code=${c.code}`;
+                const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(inviteUrl)}`;
+                return (
+                  <div key={c.code} className={`bg-gray-800 rounded-xl p-4 border ${isExpired(c.expiresAt) ? "border-red-800 opacity-60" : "border-gray-700"}`}>
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <span className={`font-mono tracking-widest text-sm font-bold ${isExpired(c.expiresAt) ? "text-red-400 line-through" : "text-green-400"}`}>{c.code}</span>
+                        {c.expiresAt ? (
+                          <p className={`text-xs mt-0.5 ${isExpired(c.expiresAt) ? "text-red-500" : "text-gray-500"}`}>
+                            {isExpired(c.expiresAt) ? "Expired" : "Expires"} {new Date(c.expiresAt).toLocaleDateString()}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-gray-600 mt-0.5">No expiry</p>
+                        )}
+                      </div>
+                      <button onClick={() => removeCode(c.code)} className="text-xs text-red-400 hover:text-red-300">Remove</button>
+                    </div>
+
+                    {!isExpired(c.expiresAt) && (
+                      <div className="flex gap-3 items-start">
+                        {/* QR Code */}
+                        <img src={qrUrl} alt={`QR for ${c.code}`} className="w-24 h-24 rounded-lg bg-white p-1 shrink-0" />
+
+                        {/* Link */}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-gray-500 mb-1">Invite link</p>
+                          <p className="text-xs text-gray-300 break-all font-mono bg-gray-900 rounded-lg px-3 py-2">{inviteUrl}</p>
+                          <button
+                            onClick={() => navigator.clipboard.writeText(inviteUrl)}
+                            className="mt-2 text-xs text-green-400 hover:text-green-300"
+                          >
+                            Copy link
+                          </button>
+                        </div>
+                      </div>
                     )}
-                    {!c.expiresAt && <p className="text-xs text-gray-600 mt-0.5">No expiry</p>}
                   </div>
-                  <button onClick={() => removeCode(c.code)} className="text-xs text-red-400 hover:text-red-300">Remove</button>
-                </div>
-              ))}
+                );
+              })}
               {codes.length === 0 && <p className="text-gray-600 text-sm">No codes yet.</p>}
             </div>
 
