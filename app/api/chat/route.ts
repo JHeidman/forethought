@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import fs from "fs";
 import path from "path";
 import { getPersona } from "@/lib/personas";
+import { seedClubs, type Gender, type AgeGroup } from "@/lib/club-defaults";
 
 // Windows/Turbopack workaround
 function getEnvVar(name: string): string {
@@ -76,12 +77,16 @@ function buildSystemPrompt(
     home_course?: string | null;
     player_notes?: string | null;
     frankie_prefs?: string | null;
+    gender?: string | null;
+    age_bracket?: string | null;
   },
   context: {
     isGreeting: boolean;
     messageCount: number;
     lastActiveAt: string | null;
     recentTopics: string;
+    clubs: Array<{ club_name: string; expected_distance: number; distance_source: string }>;
+    missingProfileFields: string[];
   }
 ): string {
   const stage = getRelationshipStage(context.messageCount);
@@ -118,6 +123,24 @@ ${firstName} is new to working with you. You have ${context.messageCount} messag
 - Ask questions to learn more about their game — what they struggle with, what they enjoy, their goals.`;
   }
 
+  // Build club distances section
+  const clubSection = context.clubs.length > 0
+    ? `\nPlayer's club distances:\n${context.clubs.map(c =>
+        `- ${c.club_name}: ${c.expected_distance} yards${c.distance_source === "demographic_default" ? " (estimated)" : " (confirmed)"}`
+      ).join("\n")}\nUse these distances when making club recommendations. If a distance seems off based on what the player tells you, update your recommendation accordingly.`
+    : "";
+
+  // Progressive profiling — what we still need to learn
+  const profilingContext = context.missingProfileFields.length > 0 ? `
+PROGRESSIVE PROFILING — FILL IN NATURALLY:
+You still don't know: ${context.missingProfileFields.join(", ")}.
+Collect these through conversation when they come up naturally — not as a form or a list of questions.
+${context.missingProfileFields.includes("gender") || context.missingProfileFields.includes("age") ?
+`For gender and age: bring these up the first time you give a club distance recommendation. Something like "By the way — distances vary a lot by age and whether you're a man or woman. Mind if I ask?" One question at a time.` : ""}
+${context.missingProfileFields.includes("clubs") ?
+`For clubs: when you first suggest a specific club, mention that you've estimated their distances but would love to know what they actually carry and how far they hit each one.` : ""}
+Never ask for information you already have. Never ask multiple questions at once.` : "";
+
   return `${persona.personality}
 
 ${basePrompt}
@@ -126,10 +149,14 @@ Player profile:
 - Name: ${profile.name}
 - Handicap/Skill level: ${profile.handicap}
 - Home course: ${profile.home_course}
+- Gender: ${profile.gender || "not yet known"}
+- Age group: ${profile.age_bracket || "not yet known"}
 - Notes about their game: ${profile.player_notes || "none yet"}
 ${profile.frankie_prefs ? `\nPersonal preferences from this player: ${profile.frankie_prefs}` : ""}
+${clubSection}
 ${relationshipContext ? `\n${relationshipContext}` : ""}
 ${proactiveContext}
+${profilingContext}
 
 RULES:
 - Keep responses concise. The player is often on the course with one hand free.
@@ -165,21 +192,23 @@ async function generateSpeech(anthropic: Anthropic, fullReply: string): Promise<
   }
 }
 
-// Extract profile fields from conversation
+// Extract profile fields from conversation (including gender and age)
 async function extractProfile(
   anthropic: Anthropic,
   conversationText: string,
   existing: Record<string, string | null>
-): Promise<{ name?: string; handicap?: string; home_course?: string }> {
+): Promise<{ name?: string; handicap?: string; home_course?: string; gender?: string; age_bracket?: string }> {
   try {
     const result = await anthropic.messages.create({
       model: "claude-sonnet-4-5",
-      max_tokens: 200,
+      max_tokens: 250,
       system: `Extract golf player profile information from this conversation. Return ONLY a JSON object with these fields (omit any field you're not confident about):
 - name: player's name
 - handicap: handicap index or skill description
 - home_course: name of their home course or where they usually play
-Return only valid JSON. Example: {"name": "Jeff", "handicap": "39", "home_course": "Genesee Valley Golf Club"}`,
+- gender: "male", "female", or "other" — only if clearly stated
+- age_bracket: "under_30", "30s", "40s", "50s", or "60_plus" — only if age or age range is mentioned
+Return only valid JSON. Example: {"name": "Jeff", "handicap": "39", "home_course": "Genesee Valley", "gender": "male", "age_bracket": "50s"}`,
       messages: [{ role: "user", content: `Conversation:\n${conversationText}\n\nAlready known: ${JSON.stringify(existing)}` }],
     });
     const raw = result.content[0].type === "text" ? result.content[0].text.trim() : "{}";
@@ -253,12 +282,13 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    // Fetch profile, history, settings, and message count in parallel
-    const [profileResult, historyResult, settingsResult, countResult] = await Promise.all([
+    // Fetch profile, history, settings, message count, and clubs in parallel
+    const [profileResult, historyResult, settingsResult, countResult, clubsResult] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("messages").select("role, content, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20),
       supabase.from("settings").select("value").eq("key", "base_prompt").single(),
       supabase.from("messages").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+      supabase.from("clubs").select("club_name, expected_distance, distance_source").eq("user_id", user.id).order("sort_order"),
     ]);
 
     let profile = profileResult.data ?? {};
@@ -268,6 +298,7 @@ export async function POST(req: NextRequest) {
     const lastActiveAt = historyRaw.length > 0 ? historyRaw[historyRaw.length - 1].created_at : null;
     const basePrompt = settingsResult.data?.value ?? "You are a knowledgeable golf caddy and instructor. Be concise and actionable.";
     const persona = getPersona(profile.persona);
+    let clubs = clubsResult.data ?? [];
 
     // Save user message (skip for greeting)
     if (!isGreeting) {
@@ -276,8 +307,8 @@ export async function POST(req: NextRequest) {
 
     const anthropic = new Anthropic({ apiKey: getEnvVar("ANTHROPIC_API_KEY") });
 
-    // During onboarding, extract profile fields
-    if (!isProfileComplete(profile as Record<string, string | null>) && !isGreeting) {
+    // Extract profile fields from conversation (always, not just during onboarding)
+    if (!isGreeting) {
       const conversationText = [
         ...history.map((m: { role: string; content: string }) => `${m.role}: ${m.content}`),
         `user: ${message}`,
@@ -287,25 +318,52 @@ export async function POST(req: NextRequest) {
         name: profile.name ?? null,
         handicap: profile.handicap ?? null,
         home_course: profile.home_course ?? null,
+        gender: profile.gender ?? null,
+        age_bracket: profile.age_bracket ?? null,
       });
 
-      const updated = {
+      const updated: Record<string, string | null> = {
         name: extracted.name || profile.name || null,
         handicap: extracted.handicap || profile.handicap || null,
         home_course: extracted.home_course || profile.home_course || null,
+        gender: extracted.gender || profile.gender || null,
+        age_bracket: extracted.age_bracket || profile.age_bracket || null,
       };
 
-      if (updated.name || updated.handicap || updated.home_course) {
+      const hasChanges = Object.keys(updated).some(k => updated[k] !== (profile as Record<string, string | null>)[k]);
+
+      if (hasChanges) {
         const { error: upsertError } = await supabase.from("profiles").upsert({
           id: user.id,
           ...updated,
           player_notes: profile.player_notes,
           frankie_prefs: profile.frankie_prefs,
           persona: profile.persona || "frankie",
+          clubs_seeded: profile.clubs_seeded ?? false,
           updated_at: new Date().toISOString(),
         });
         if (upsertError) console.error("Profile upsert error:", upsertError);
         profile = { ...profile, ...updated };
+      }
+
+      // Seed clubs if we have enough info and haven't done it yet
+      if (!profile.clubs_seeded && profile.handicap && clubs.length === 0) {
+        const gender = (profile.gender as Gender) || "male";
+        const age = (profile.age_bracket as AgeGroup) || "30s";
+        const clubsToInsert = seedClubs(profile.handicap, gender, age).map(c => ({
+          ...c,
+          user_id: user.id,
+        }));
+        const { error: clubsError } = await supabase.from("clubs").insert(clubsToInsert);
+        if (!clubsError) {
+          await supabase.from("profiles").update({ clubs_seeded: true }).eq("id", user.id);
+          profile = { ...profile, clubs_seeded: true };
+          clubs = clubsToInsert.map(c => ({
+            club_name: c.club_name,
+            expected_distance: c.expected_distance,
+            distance_source: c.distance_source,
+          }));
+        }
       }
     }
 
@@ -316,6 +374,12 @@ export async function POST(req: NextRequest) {
       recentTopics = await summarizeRecentTopics(anthropic, history);
     }
 
+    // Determine what profile info is still missing
+    const missingProfileFields: string[] = [];
+    if (!profile.gender) missingProfileFields.push("gender");
+    if (!profile.age_bracket) missingProfileFields.push("age");
+    if (clubs.length === 0) missingProfileFields.push("clubs");
+
     // Build system prompt
     const profileComplete = isProfileComplete(profile as Record<string, string | null>);
     const systemPromptText = profileComplete
@@ -324,6 +388,8 @@ export async function POST(req: NextRequest) {
           messageCount,
           lastActiveAt,
           recentTopics,
+          clubs,
+          missingProfileFields,
         })
       : buildOnboardingPrompt(profile, isGreeting || history.length === 0);
 
