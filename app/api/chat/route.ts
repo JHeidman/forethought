@@ -131,15 +131,16 @@ ${firstName} is new to working with you. You have ${context.messageCount} messag
     : "";
 
   // Progressive profiling — what we still need to learn
+  const needsGenderOrAge = context.missingProfileFields.includes("gender") || context.missingProfileFields.includes("age");
+  const needsClubs = context.missingProfileFields.includes("clubs");
   const profilingContext = context.missingProfileFields.length > 0 ? `
-PROGRESSIVE PROFILING — FILL IN NATURALLY:
+PROGRESSIVE PROFILING — YOU NEED TO ASK THESE QUESTIONS:
 You still don't know: ${context.missingProfileFields.join(", ")}.
-Collect these through conversation when they come up naturally — not as a form or a list of questions.
-${context.missingProfileFields.includes("gender") || context.missingProfileFields.includes("age") ?
-`For gender and age: bring these up the first time you give a club distance recommendation. Something like "By the way — distances vary a lot by age and whether you're a man or woman. Mind if I ask?" One question at a time.` : ""}
-${context.missingProfileFields.includes("clubs") ?
-`For clubs: when you first suggest a specific club, mention that you've estimated their distances but would love to know what they actually carry and how far they hit each one.` : ""}
-Never ask for information you already have. Never ask multiple questions at once.` : "";
+${needsGenderOrAge ? `
+AGE & GENDER — ask this in your NEXT response if you haven't already this session. Weave it in naturally at the end of whatever you're saying. Example: "By the way — to give you the best club recommendations, it helps to know a bit more about you. Are you a guy or a woman? And roughly what age range?" Just one casual question, friendly tone. Don't make it feel like a form.` : ""}
+${needsClubs ? `
+CLUBS — once you know their age and gender (or if they've already answered), ask about their bag in your next 1-2 responses. Something like: "I've got some estimated distances for your clubs, but I'd love to know what you actually carry. What's in your bag? And do you have a rough sense of how far you hit your 7-iron?" Keep it conversational.` : ""}
+IMPORTANT: Ask only ONE thing per response. Never ask multiple questions at once. Don't repeat a question you've already asked this session.` : "";
 
   return `${persona.personality}
 
