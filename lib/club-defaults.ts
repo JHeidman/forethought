@@ -85,26 +85,34 @@ export function getDefaultDistance(
 export function buildDefaultBasis(
   gender: Gender,
   age: AgeGroup,
-  handicap: string
+  handicap: string,
+  genderAssumed: boolean,
+  ageAssumed: boolean
 ): string {
-  const genderLabel = gender === "male" ? "male golfer" : gender === "female" ? "female golfer" : "golfer";
+  const genderLabel = gender === "male" ? "male" : gender === "female" ? "female" : "unspecified";
   const ageLabel: Record<AgeGroup, string> = {
     under_30: "under 30",
-    "30s": "in your 30s",
-    "40s": "in your 40s",
-    "50s": "in your 50s",
-    "60_plus": "60 or older",
+    "30s": "30s",
+    "40s": "40s",
+    "50s": "50s",
+    "60_plus": "60+",
   };
   const hNum = parseFloat(handicap);
-  const hLabel = isNaN(hNum) ? handicap : `${hNum} handicap`;
+  const hLabel = isNaN(hNum) ? handicap : `${hNum} hdcp`;
 
-  return `Estimated from typical distances for a ${genderLabel} ${ageLabel[age]} with a ${hLabel}`;
+  const parts: string[] = [`${hLabel}`];
+  parts.push(`${genderAssumed ? "assumed " : ""}${genderLabel}`);
+  parts.push(`${ageAssumed ? "assumed " : ""}${ageLabel[age]}`);
+
+  return `Default · ${parts.join(" · ")}`;
 }
 
 export function seedClubs(
   handicap: string,
   gender: Gender = "male",
-  age: AgeGroup = "30s"
+  age: AgeGroup = "30s",
+  genderAssumed = true,
+  ageAssumed = true
 ): Array<{
   club_name: string;
   expected_distance: number;
@@ -112,7 +120,7 @@ export function seedClubs(
   default_basis: string;
   sort_order: number;
 }> {
-  const basis = buildDefaultBasis(gender, age, handicap);
+  const basis = buildDefaultBasis(gender, age, handicap, genderAssumed, ageAssumed);
   return STANDARD_CLUBS.map(c => ({
     club_name: c.name,
     expected_distance: getDefaultDistance(c.name, handicap, gender, age),

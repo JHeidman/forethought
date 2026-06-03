@@ -144,6 +144,8 @@ IMPORTANT: Ask only ONE thing per response. Never ask multiple questions at once
 
   return `${persona.personality}
 
+${profilingContext}
+
 ${basePrompt}
 
 Player profile:
@@ -157,7 +159,6 @@ ${profile.frankie_prefs ? `\nPersonal preferences from this player: ${profile.fr
 ${clubSection}
 ${relationshipContext ? `\n${relationshipContext}` : ""}
 ${proactiveContext}
-${profilingContext}
 
 RULES:
 - Keep responses concise. The player is often on the course with one hand free.
@@ -367,7 +368,9 @@ export async function POST(req: NextRequest) {
       if (!profile.clubs_seeded && profile.handicap && clubs.length === 0) {
         const gender = (profile.gender as Gender) || "male";
         const age = (profile.age_bracket as AgeGroup) || "30s";
-        const clubsToInsert = seedClubs(profile.handicap, gender, age).map(c => ({ ...c, user_id: user.id }));
+        const genderAssumed = !profile.gender;
+        const ageAssumed = !profile.age_bracket;
+        const clubsToInsert = seedClubs(profile.handicap, gender, age, genderAssumed, ageAssumed).map(c => ({ ...c, user_id: user.id }));
         const { error: clubsError } = await supabase.from("clubs").insert(clubsToInsert);
         if (!clubsError) {
           await supabase.from("profiles").update({ clubs_seeded: true }).eq("id", user.id);
