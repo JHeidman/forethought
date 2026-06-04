@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import CourseMode from "@/components/CourseMode";
 
 type Message = {
   id: string;
@@ -27,6 +28,7 @@ export default function ChatPage() {
   });
   const [personaName, setPersonaName] = useState("Frankie");
   const [planSavedToast, setPlanSavedToast] = useState(false);
+  const [activeRound, setActiveRound] = useState<{ courseId: number; courseName: string; tee: string; conditions: string; } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
@@ -154,7 +156,7 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed }),
+        body: JSON.stringify({ message: trimmed, roundContext: activeRound }),
       });
       const data = await res.json();
 
@@ -269,6 +271,17 @@ export default function ChatPage() {
           )}
         </button>
       </header>
+
+      {/* Course Mode */}
+      <CourseMode
+        activeRound={activeRound}
+        onStart={(ctx) => {
+          setActiveRound(ctx);
+          // Send a message to let Frankie know we're on the course
+          sendMessage(`I'm heading out to play today at ${ctx.courseName} from the ${ctx.tee} tees.${ctx.conditions ? ` Conditions: ${ctx.conditions}.` : ""} Get me ready.`);
+        }}
+        onEnd={() => setActiveRound(null)}
+      />
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">

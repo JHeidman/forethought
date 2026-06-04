@@ -6,6 +6,7 @@ import fs from "fs";
 import path from "path";
 import { getPersona } from "@/lib/personas";
 import { seedClubs, type Gender, type AgeGroup } from "@/lib/club-defaults";
+import { getCourseDetail, formatScorecardForPrompt } from "@/lib/golf-course-api";
 
 // Windows/Turbopack workaround
 function getEnvVar(name: string): string {
@@ -87,6 +88,7 @@ function buildSystemPrompt(
     recentTopics: string;
     clubs: Array<{ club_name: string; expected_distance: number; distance_source: string }>;
     missingProfileFields: string[];
+    scorecardContext: string;
   }
 ): string {
   const stage = getRelationshipStage(context.messageCount);
@@ -157,6 +159,7 @@ Player profile:
 - Notes about their game: ${profile.player_notes || "none yet"}
 ${profile.frankie_prefs ? `\nPersonal preferences from this player: ${profile.frankie_prefs}` : ""}
 ${clubSection}
+${context.scorecardContext ? `\n${context.scorecardContext}` : ""}
 ${relationshipContext ? `\n${relationshipContext}` : ""}
 ${proactiveContext}
 
@@ -260,7 +263,8 @@ const savePlanTool: Anthropic.Tool = {
 
 export async function POST(req: NextRequest) {
   try {
-    const { message, isGreeting } = await req.json();
+    const { message, isGreeting, roundContext } = await req.json();
+    // roundContext: { courseId, courseName, tee, conditions } — injected when player is on course
     if (!message?.trim()) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
     }
@@ -384,6 +388,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Load scorecard if player is on the course
+    let scorecardContext = "";
+    if (roundContext?.courseId) {
+      try {
+        const course = await getCourseDetail(roundContext.courseId);
+        if (course) {
+          const gender = (profile.gender === "female" ? "female" : "male") as "male" | "female";
+          scorecardContext = formatScorecardForPrompt(course, roundContext.tee ?? "White", gender);
+        }
+      } catch (err) {
+        console.error("Scorecard load error:", err);
+      }
+    }
+
     // Determine what profile info is still missing
     const missingProfileFields: string[] = [];
     if (!profile.gender) missingProfileFields.push("gender");
@@ -400,6 +418,7 @@ export async function POST(req: NextRequest) {
           recentTopics,
           clubs,
           missingProfileFields,
+          scorecardContext,
         })
       : buildOnboardingPrompt(profile, isGreeting || history.length === 0);
 
