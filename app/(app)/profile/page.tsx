@@ -34,6 +34,8 @@ export default function ProfilePage() {
   const [clubs, setClubs] = useState<Club[]>([]);
   const [editingClub, setEditingClub] = useState<string | null>(null);
   const [editingDistance, setEditingDistance] = useState<string>("");
+  const [aiNotes, setAiNotes] = useState<string | null>(null);
+  const [clearingAiNotes, setClearingAiNotes] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -58,6 +60,7 @@ export default function ProfilePage() {
           frankie_prefs: profileRes.data.frankie_prefs ?? "",
           persona: (profileRes.data.persona as PersonaKey) ?? "frankie",
         });
+        setAiNotes(profileRes.data.ai_notes ?? null);
       }
       setClubs(clubsRes.data ?? []);
       setLoading(false);
@@ -91,6 +94,16 @@ export default function ProfilePage() {
       ));
     }
     setEditingClub(null);
+  }
+
+  async function clearAiNotes() {
+    setClearingAiNotes(true);
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase.from("profiles").update({ ai_notes: null }).eq("id", user.id);
+    setAiNotes(null);
+    setClearingAiNotes(false);
   }
 
   async function handleSignOut() {
@@ -227,6 +240,32 @@ export default function ProfilePage() {
             </p>
           </div>
         )}
+
+        {/* AI Coaching Notes */}
+        <div className="border-t border-gray-800 pt-6">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide">What Your Caddy Has Learned</p>
+              <p className="text-xs text-gray-600 mt-0.5">Auto-updated every 10 messages</p>
+            </div>
+            {aiNotes && (
+              <button onClick={clearAiNotes} disabled={clearingAiNotes}
+                className="text-xs text-gray-600 hover:text-red-400 transition-colors disabled:opacity-50">
+                {clearingAiNotes ? "Clearing…" : "Clear"}
+              </button>
+            )}
+          </div>
+
+          {aiNotes ? (
+            <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
+              <p className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">{aiNotes}</p>
+            </div>
+          ) : (
+            <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
+              <p className="text-sm text-gray-600 italic">Nothing captured yet. After a few conversations, your caddy will start noting what they&apos;ve learned about your game here.</p>
+            </div>
+          )}
+        </div>
 
         <button type="button" onClick={handleSignOut}
           className="w-full rounded-xl border border-gray-700 hover:border-red-500 hover:text-red-400 px-4 py-3 text-gray-400 font-medium text-base transition-colors">

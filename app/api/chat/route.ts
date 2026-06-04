@@ -157,6 +157,7 @@ Player profile:
 - Gender: ${profile.gender || "not yet known"}
 - Age group: ${profile.age_bracket || "not yet known"}
 - Notes about their game: ${profile.player_notes || "none yet"}
+- AI coaching notes (auto-generated from past sessions): ${(profile as Record<string, string | null>).ai_notes || "none yet — will build over time"}
 ${profile.frankie_prefs ? `\nPersonal preferences from this player: ${profile.frankie_prefs}` : ""}
 ${clubSection}
 ${context.scorecardContext ? `\n${context.scorecardContext}` : ""}
@@ -244,6 +245,72 @@ async function summarizeRecentTopics(
     return result.content[0].type === "text" ? result.content[0].text.trim() : "";
   } catch {
     return "";
+  }
+}
+
+// Async fire-and-forget: extract coaching insights from recent conversation and append to ai_notes
+async function updateAiNotes(
+  userId: string,
+  anthropic: Anthropic,
+  supabaseUrl: string,
+  supabaseKey: string,
+  existingAiNotes: string | null
+): Promise<void> {
+  try {
+    // Use service-role-equivalent client with anon key is fine here — we already have userId
+    const { createClient } = await import("@supabase/supabase-js");
+    const adminClient = createClient(supabaseUrl, getEnvVar("SUPABASE_SERVICE_ROLE_KEY"), {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    // Fetch last 30 messages for this user
+    const { data: messages } = await adminClient
+      .from("messages")
+      .select("role, content, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(30);
+
+    if (!messages || messages.length < 5) return; // not enough to summarize
+
+    const conversation = messages.reverse()
+      .map((m: { role: string; content: string }) => `${m.role === "user" ? "Player" : "Caddy"}: ${m.content}`)
+      .join("\n");
+
+    const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+    const result = await anthropic.messages.create({
+      model: "claude-sonnet-4-5",
+      max_tokens: 300,
+      system: `You are reviewing a golf coaching conversation to extract key insights about this player's game.
+
+Extract ONLY new, specific, concrete information not already in the existing notes.
+Focus on: swing issues identified and fixes tried, progress made or breakthroughs, goals or focus areas mentioned, courses played or scores, anything the player asked to remember, changes in skill level.
+
+Format as 1-3 bullet points starting with "• ", prefixed with today's date (${today}).
+Example: "• ${today}: Fixed weight transfer using finish-hold drill. Still struggling with driver contact."
+
+If nothing new and meaningful was learned in this conversation, return exactly: NOTHING_NEW
+
+Existing notes:
+${existingAiNotes || "None yet."}`,
+      messages: [{ role: "user", content: `Recent conversation:\n\n${conversation}` }],
+    });
+
+    const extracted = result.content[0].type === "text" ? result.content[0].text.trim() : "";
+    if (!extracted || extracted === "NOTHING_NEW") return;
+
+    const updatedNotes = existingAiNotes
+      ? `${existingAiNotes}\n${extracted}`
+      : extracted;
+
+    await adminClient
+      .from("profiles")
+      .update({ ai_notes: updatedNotes, updated_at: new Date().toISOString() })
+      .eq("id", userId);
+
+  } catch (err) {
+    console.error("updateAiNotes error:", err);
   }
 }
 
@@ -517,6 +584,18 @@ export async function POST(req: NextRequest) {
     }
 
     await supabase.from("messages").insert({ user_id: user.id, role: "assistant", content: reply });
+
+    // Fire-and-forget: update AI notes every 10 messages (no latency impact)
+    const newMessageCount = messageCount + 2; // user + assistant just added
+    if (!isGreeting && newMessageCount % 10 === 0) {
+      updateAiNotes(
+        user.id,
+        anthropic,
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        getEnvVar("SUPABASE_SERVICE_ROLE_KEY"),
+        profile.ai_notes ?? null
+      ); // intentionally not awaited
+    }
 
     return NextResponse.json({
       reply,
