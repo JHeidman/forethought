@@ -29,6 +29,7 @@ export default function ChatPage() {
   const [personaName, setPersonaName] = useState("Frankie");
   const [planSavedToast, setPlanSavedToast] = useState(false);
   const [activeRound, setActiveRound] = useState<{ courseId: number; courseName: string; tee: string; conditions: string; } | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
@@ -79,6 +80,7 @@ export default function ChatPage() {
             if (data.voiceId) currentVoiceIdRef.current = data.voiceId;
             const msg = { id: crypto.randomUUID(), role: "assistant" as const, content: data.reply };
             setMessages([msg]);
+            setShowSuggestions(true);
             await speakText(data.speech || data.reply, data.voiceId);
           }
         } finally {
@@ -148,6 +150,7 @@ export default function ChatPage() {
     if (!trimmed || appState === "thinking" || appState === "speaking") return;
 
     setInput("");
+    setShowSuggestions(false);
     setAppState("thinking");
     const tempId = crypto.randomUUID();
     setMessages((prev) => [...prev, { id: tempId, role: "user", content: trimmed }]);
@@ -296,6 +299,30 @@ export default function ChatPage() {
             </div>
           </div>
         ))}
+
+        {/* Suggestion chips — shown after first greeting, hidden once user sends anything */}
+        {showSuggestions && appState === "idle" && (
+          <div className="flex flex-col gap-2 mt-2">
+            <p className="text-xs text-gray-600 px-1">Try asking…</p>
+            <div className="flex flex-wrap gap-2">
+              {[
+                "Help me fix my driver",
+                "I'm playing a round today",
+                "Build me a practice plan",
+                "My short game needs work",
+                "What can you help me with?",
+              ].map((chip) => (
+                <button
+                  key={chip}
+                  onClick={() => sendMessage(chip)}
+                  className="text-sm px-4 py-2 rounded-full border border-gray-700 bg-gray-800 text-gray-300 hover:border-green-500 hover:text-green-400 transition-colors"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {appState === "thinking" && (
           <div className="flex justify-start">
