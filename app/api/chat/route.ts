@@ -24,7 +24,7 @@ function isProfileComplete(profile: Record<string, string | null>) {
   return !!(profile.name && profile.handicap && profile.home_course);
 }
 
-const SPEECH_THRESHOLD = 300;
+const SPEECH_THRESHOLD = 600;
 
 // How long since a date, in human-readable form
 function timeSince(isoDate: string): string {
@@ -856,7 +856,7 @@ export async function POST(req: NextRequest) {
       speech = reply;
     } else {
       const sentences = reply.replace(/\n+/g, " ").match(/[^.!?]+[.!?]+/g) ?? [];
-      speech = sentences.slice(0, 2).join(" ").trim() || reply.substring(0, SPEECH_THRESHOLD);
+      speech = sentences.slice(0, 4).join(" ").trim() || reply.substring(0, SPEECH_THRESHOLD);
     }
 
     await supabase.from("messages").insert({ user_id: user.id, role: "assistant", content: reply });

@@ -299,14 +299,19 @@ export default function ChatPage() {
     else setAppState("idle");
   }
 
+  function toggleListening() {
+    if (appState === "listening") stopListening();
+    else if (appState === "idle") startListening();
+  }
+
   function stopSpeaking() {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     setAppState("idle");
   }
 
   const stateLabel: Record<AppState, string> = {
-    idle: voiceMode ? "Hold to speak" : "",
-    listening: "Listening…",
+    idle: voiceMode ? "Tap to speak" : "",
+    listening: "Listening… tap to send",
     thinking: `${personaName} is thinking…`,
     speaking: `${personaName} is speaking…`,
   };
@@ -440,9 +445,7 @@ export default function ChatPage() {
             </button>
           ) : (
             <button
-              onPointerDown={startListening}
-              onPointerUp={stopListening}
-              onPointerLeave={stopListening}
+              onClick={toggleListening}
               disabled={appState === "thinking"}
               className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all ${
                 appState === "listening" ? "bg-red-600 scale-110 ring-4 ring-red-400 ring-opacity-50" :
@@ -471,8 +474,8 @@ export default function ChatPage() {
             className="flex-1 rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-base resize-none focus:outline-none focus:border-green-500 max-h-32 disabled:opacity-50"
           />
           {voiceSupported && (
-            <button type="button" onPointerDown={startListening} onPointerUp={stopListening} onPointerLeave={stopListening}
-              disabled={appState !== "idle"}
+            <button type="button" onClick={toggleListening}
+              disabled={appState === "thinking" || appState === "speaking"}
               className={`shrink-0 rounded-xl p-3 transition-colors disabled:opacity-40 ${appState === "listening" ? "bg-red-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
