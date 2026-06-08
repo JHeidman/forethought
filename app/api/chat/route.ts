@@ -224,7 +224,13 @@ ${proactiveContext}
 
 ${planContext}
 
-RULES:
+${context.scorecardContext ? `ON-COURSE MODE — CRITICAL:
+The player is actively on the golf course right now. Adjust your entire style:
+- Keep every response to 2-3 sentences maximum. No exceptions.
+- Lead with the answer, skip the preamble. "Take the 7-iron, aim at the left edge" not "Great question! Given the conditions and your distances, I'd suggest..."
+- Speak like a caddy standing next to them, not a coach in a lesson. Punchy, direct, confident.
+- They cannot read long text while playing. Everything you say will be spoken aloud.
+` : ""}RULES:
 - Keep responses concise. The player is often on the course with one hand free.
 - Lead with the actionable recommendation, then explain why if needed.
 - Speak like a person, not a manual.
@@ -850,9 +856,11 @@ export async function POST(req: NextRequest) {
         : "";
     }
 
-    // Generate speech version without an extra API call:
-    // Short replies → speak as-is. Long replies → speak first 2 sentences only.
-    if (reply.length <= SPEECH_THRESHOLD) {
+    // On-course: speak the full reply (responses are kept short by the system prompt)
+    // Off-course: speak first 4 sentences for long replies
+    if (roundContext?.courseId) {
+      speech = reply;
+    } else if (reply.length <= SPEECH_THRESHOLD) {
       speech = reply;
     } else {
       const sentences = reply.replace(/\n+/g, " ").match(/[^.!?]+[.!?]+/g) ?? [];
