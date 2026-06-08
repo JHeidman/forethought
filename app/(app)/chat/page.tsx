@@ -28,6 +28,7 @@ export default function ChatPage() {
   });
   const [personaName, setPersonaName] = useState("Frankie");
   const [planSavedToast, setPlanSavedToast] = useState(false);
+  const [seasonPlanSavedToast, setSeasonPlanSavedToast] = useState(false);
   const [activeRound, setActiveRound] = useState<{ courseId: number; courseName: string; tee: string; conditions: string; } | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestionChips, setSuggestionChips] = useState<string[]>([]);
@@ -237,11 +238,18 @@ export default function ChatPage() {
         setPlanSavedToast(true);
         setTimeout(() => setPlanSavedToast(false), 3000);
       }
+      if (data.seasonPlanSaved) {
+        setSeasonPlanSavedToast(true);
+        setTimeout(() => setSeasonPlanSavedToast(false), 5000);
+      }
 
       if (data.reply) {
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "assistant", content: data.reply }]);
         await speakText(data.speech || data.reply, data.voiceId);
         setAppState("idle"); // ensure idle even if muted or speakText returned early
+        // Refresh chips after every reply so there's always something to tap
+        setSuggestionChips(buildChips(playerGoal));
+        setShowSuggestions(true);
       } else {
         setAppState("idle");
       }
@@ -309,6 +317,14 @@ export default function ChatPage() {
       {planSavedToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg">
           ✓ Practice plan saved
+        </div>
+      )}
+
+      {/* Season plan saved toast */}
+      {seasonPlanSavedToast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-green-700 text-white px-5 py-3 rounded-2xl text-sm font-medium shadow-lg flex flex-col items-center gap-1">
+          <span>🗺️ Your season roadmap is ready</span>
+          <a href="/plans" className="text-green-300 text-xs underline">View in My Plans →</a>
         </div>
       )}
 

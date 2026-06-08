@@ -90,6 +90,8 @@ function buildSystemPrompt(
     clubs: Array<{ club_name: string; expected_distance: number; distance_source: string }>;
     missingProfileFields: string[];
     scorecardContext: string;
+    planIngredients: PlanIngredients;
+    seasonPlan: string | null;
   }
 ): string {
   const stage = getRelationshipStage(context.messageCount);
@@ -154,6 +156,8 @@ This is what ${firstName} is working toward. Let it inform your coaching — con
     : `PLAYER GOAL: Not yet known.
 This is important context you're still missing. Within the first few sessions, explore what they're working toward. A good opener: "What would a great golf season look like for you?" Many players have a score they want to break — once you know their goal, everything you coach becomes more meaningful.`;
 
+  const planContext = buildPlanContext(profile.goal ?? null, context.planIngredients, context.seasonPlan, firstName);
+
   return `${persona.personality}
 
 ${profilingContext}
@@ -176,6 +180,8 @@ ${clubSection}
 ${context.scorecardContext ? `\n${context.scorecardContext}` : ""}
 ${relationshipContext ? `\n${relationshipContext}` : ""}
 ${proactiveContext}
+
+${planContext}
 
 RULES:
 - Keep responses concise. The player is often on the course with one hand free.
@@ -328,7 +334,126 @@ ${existingAiNotes || "None yet."}`,
   }
 }
 
-// Save plan tool definition
+// ── Season plan helpers ──────────────────────────────────────────────────────
+
+type PlanIngredients = {
+  scoring_range?: string;
+  strokes_lost?: string;
+  round_frequency?: string;
+  practice_frequency?: string;
+  time_horizon?: string;
+  biggest_weakness?: string;
+};
+
+function hasEnoughForPlan(goal: string | null, ing: PlanIngredients): boolean {
+  if (!goal) return false;
+  if (!ing.scoring_range) return false;
+  const extras = ["strokes_lost", "round_frequency", "practice_frequency", "biggest_weakness"] as const;
+  return extras.filter(k => ing[k]).length >= 2;
+}
+
+function getNextPlanQuestion(ing: PlanIngredients): { field: string; question: string } | null {
+  const queue: Array<{ field: keyof PlanIngredients; question: string }> = [
+    {
+      field: "scoring_range",
+      question: "What do you typically shoot? Not your best round — just an honest average.",
+    },
+    {
+      field: "strokes_lost",
+      question: "If you had to be honest about where most of your strokes go — is it the driver, short game, putting, or blow-up holes?",
+    },
+    {
+      field: "round_frequency",
+      question: "How often do you actually get out and play?",
+    },
+    {
+      field: "practice_frequency",
+      question: "How often do you want to practice — range, putting green, chipping area? Never is a totally valid answer. I just want to build something you'll actually do.",
+    },
+    {
+      field: "biggest_weakness",
+      question: "If you could fix one thing about your game overnight, what would it be?",
+    },
+  ];
+  return queue.find(q => !ing[q.field]) ?? null;
+}
+
+function buildPlanContext(
+  goal: string | null,
+  ing: PlanIngredients,
+  existingPlan: string | null,
+  firstName: string
+): string {
+  if (!goal) return "";
+
+  const known: string[] = [];
+  if (ing.scoring_range) known.push(`scoring: ${ing.scoring_range}`);
+  if (ing.strokes_lost) known.push(`where strokes go: ${ing.strokes_lost}`);
+  if (ing.round_frequency) known.push(`plays: ${ing.round_frequency}`);
+  if (ing.practice_frequency) known.push(`practices: ${ing.practice_frequency}`);
+  if (ing.time_horizon) known.push(`timeline: ${ing.time_horizon}`);
+  if (ing.biggest_weakness) known.push(`self-reported weakness: ${ing.biggest_weakness}`);
+
+  const next = getNextPlanQuestion(ing);
+  const enough = hasEnoughForPlan(goal, ing);
+
+  let section = `\nSEASON PLAN BUILDING:
+Goal: "${goal}"
+Plan ingredients you've gathered so far: ${known.length > 0 ? known.join(", ") : "none yet"}
+`;
+
+  if (existingPlan) {
+    section += `\nA season plan already exists for ${firstName}. Reference it naturally when relevant. If something significant changes (handicap improvement, new focus area), offer to update it using the save_season_plan tool.\n`;
+  } else if (enough) {
+    section += `\nYou have enough information to draft ${firstName}'s season plan. When the conversation reaches a natural moment — not forced — say something like: "I've been paying attention to what you've told me, and I think I have enough to put together a real roadmap for getting you to your goal. Want to hear it?" If they say yes, generate it and save it using the save_season_plan tool.\n`;
+  } else if (next) {
+    section += `\nNext ingredient to gather: ${next.field}
+Suggested question (use your own voice, not verbatim): "${next.question}"
+Ask this naturally when the conversation allows — not as an interrogation. ONE question per response. Only ask if the conversation has a natural pause or opening.\n`;
+  }
+
+  if (!existingPlan) {
+    section += `\nIf ${firstName} explicitly asks for a plan, roadmap, or "how do I get there" — generate it immediately using save_season_plan, noting any assumptions you had to make.\n`;
+  }
+
+  return section;
+}
+
+// Extract plan ingredients from conversation
+async function extractPlanIngredients(
+  anthropic: Anthropic,
+  conversationText: string,
+  existing: PlanIngredients
+): Promise<PlanIngredients> {
+  try {
+    const result = await anthropic.messages.create({
+      model: "claude-sonnet-4-5",
+      max_tokens: 200,
+      system: `Extract golf improvement plan information from this conversation. Return ONLY a JSON object with these fields (omit any you're not confident about — do not guess):
+- scoring_range: what they typically shoot, e.g. "98-104", "low 90s", "mid-80s"
+- strokes_lost: where most strokes go, e.g. "short game and blow-up holes", "putting and driver"
+- round_frequency: how often they play, e.g. "once a week", "2-3 times a month", "rarely"
+- practice_frequency: how often they practice, e.g. "never", "once a week", "a few times a month"
+- time_horizon: when they want to reach their goal, e.g. "end of summer", "by September", "this year"
+- biggest_weakness: self-identified weakness, e.g. "short game", "mental game", "driver consistency"
+Return only valid JSON. Already known: ${JSON.stringify(existing)}`,
+      messages: [{ role: "user", content: conversationText }],
+    });
+    const raw = result.content[0].type === "text" ? result.content[0].text.trim() : "{}";
+    const text = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
+    const parsed = JSON.parse(text);
+    // Merge: only overwrite if new value is non-empty
+    const merged: PlanIngredients = { ...existing };
+    for (const k of Object.keys(parsed) as Array<keyof PlanIngredients>) {
+      if (parsed[k] && !existing[k]) merged[k] = parsed[k];
+    }
+    return merged;
+  } catch {
+    return existing;
+  }
+}
+
+// Save practice plan tool
 const savePlanTool: Anthropic.Tool = {
   name: "save_plan",
   description: "Save a practice plan for the player. Call this when you've created a structured practice plan and the player wants to save it for later reference.",
@@ -339,6 +464,38 @@ const savePlanTool: Anthropic.Tool = {
       content: { type: "string", description: "The full practice plan content" },
     },
     required: ["title", "content"],
+  },
+};
+
+// Save season plan tool
+const saveSeasonPlanTool: Anthropic.Tool = {
+  name: "save_season_plan",
+  description: "Generate and save the player's season improvement roadmap. Call this when: (1) the player explicitly asks for a plan or roadmap, OR (2) you've gathered enough information about their game and you're offering to share what you've put together. The plan should be realistic, honest, and calibrated to their actual practice/play habits.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      plan: {
+        type: "string",
+        description: `The full season plan. Format it like this (use emoji headers):
+
+🎯 Goal: [restate their goal]
+
+📊 The Honest Diagnosis
+[2-3 sentences about where strokes are going, based on what they told you]
+
+🔧 The Priority Stack
+[3 priorities in ROI order — what to fix first for maximum strokes saved. Brief, actionable.]
+
+📅 Realistic Milestones
+[2-3 milestones calibrated to their actual play and practice frequency. Be honest — if they rarely practice, say so and adjust expectations accordingly.]
+
+💡 This Week
+[One specific, concrete thing to try right now. Not a list — just one thing.]
+
+Write directly to the player. Be honest. If they said they never practice, build a plan that works without practice. Keep it under 350 words.`
+      },
+    },
+    required: ["plan"],
   },
 };
 
@@ -369,7 +526,7 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    // Fetch profile, history, settings, message count, and clubs in parallel
+    // Fetch profile, history, settings, message count, clubs, and plan data in parallel
     const [profileResult, historyResult, settingsResult, countResult, clubsResult] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("messages").select("role, content, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20),
@@ -386,6 +543,8 @@ export async function POST(req: NextRequest) {
     const basePrompt = settingsResult.data?.value ?? "You are a knowledgeable golf caddy and instructor. Be concise and actionable.";
     const persona = getPersona(profile.persona);
     let clubs = clubsResult.data ?? [];
+    let planIngredients: PlanIngredients = (profile.plan_ingredients as PlanIngredients) ?? {};
+    const seasonPlan: string | null = profile.season_plan ?? null;
 
     // Save user message (skip for greeting)
     if (!isGreeting) {
@@ -411,7 +570,10 @@ export async function POST(req: NextRequest) {
       !profile.goal
     );
 
-    const [extractedProfile, recentTopics] = await Promise.all([
+    // Extract plan ingredients when we have a goal and plan isn't complete yet
+    const needsIngredients = !isGreeting && !!profile.goal && !hasEnoughForPlan(profile.goal ?? null, planIngredients);
+
+    const [extractedProfile, recentTopics, updatedIngredients] = await Promise.all([
       needsExtraction
         ? extractProfile(anthropic, conversationText, {
             name: profile.name ?? null,
@@ -425,6 +587,9 @@ export async function POST(req: NextRequest) {
       isReturningUser && history.length > 0
         ? summarizeRecentTopics(anthropic, history)
         : Promise.resolve(""),
+      needsIngredients
+        ? extractPlanIngredients(anthropic, conversationText, planIngredients)
+        : Promise.resolve(planIngredients),
     ]);
 
     if (needsExtraction && Object.keys(extractedProfile).length > 0) {
@@ -473,6 +638,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Save updated plan ingredients if they changed
+    if (needsIngredients && JSON.stringify(updatedIngredients) !== JSON.stringify(planIngredients)) {
+      planIngredients = updatedIngredients;
+      await supabase.from("profiles").update({ plan_ingredients: planIngredients }).eq("id", user.id);
+    }
+
     // Load scorecard if player is on the course
     let scorecardContext = "";
     if (roundContext?.courseId) {
@@ -505,6 +676,8 @@ export async function POST(req: NextRequest) {
           clubs,
           missingProfileFields,
           scorecardContext,
+          planIngredients,
+          seasonPlan,
         })
       : buildOnboardingPrompt(profile, isGreeting || history.length === 0);
 
@@ -544,13 +717,14 @@ export async function POST(req: NextRequest) {
       model: "claude-sonnet-4-5",
       max_tokens: 1024,
       system: [{ type: "text", text: systemPromptText, cache_control: { type: "ephemeral" } }],
-      tools: [savePlanTool],
+      tools: [savePlanTool, saveSeasonPlanTool],
       messages: apiMessages,
     });
 
     let reply = "";
     let speech = "";
     let planSaved = false;
+    let seasonPlanSaved = false;
 
     if (response.stop_reason === "tool_use") {
       const toolBlock = response.content.find((b) => b.type === "tool_use");
@@ -569,7 +743,7 @@ export async function POST(req: NextRequest) {
           model: "claude-sonnet-4-5",
           max_tokens: 512,
           system: [{ type: "text", text: systemPromptText, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool],
+          tools: [savePlanTool, saveSeasonPlanTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -578,6 +752,38 @@ export async function POST(req: NextRequest) {
                 type: "tool_result",
                 tool_use_id: toolBlock.id,
                 content: "Plan saved successfully.",
+              }],
+            },
+          ],
+        });
+
+        reply = followUp.content.find((b) => b.type === "text")?.type === "text"
+          ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
+          : "";
+
+      } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "save_season_plan") {
+        const input = toolBlock.input as { plan: string };
+
+        // Save season plan to profile
+        await supabase.from("profiles").update({
+          season_plan: input.plan,
+          updated_at: new Date().toISOString(),
+        }).eq("id", user.id);
+        seasonPlanSaved = true;
+
+        const followUp = await anthropic.messages.create({
+          model: "claude-sonnet-4-5",
+          max_tokens: 512,
+          system: [{ type: "text", text: systemPromptText, cache_control: { type: "ephemeral" } }],
+          tools: [savePlanTool, saveSeasonPlanTool],
+          messages: [
+            ...apiMessages,
+            { role: "assistant", content: response.content },
+            {
+              role: "user", content: [{
+                type: "tool_result",
+                tool_use_id: toolBlock.id,
+                content: "Season plan saved successfully.",
               }],
             },
           ],
@@ -622,6 +828,7 @@ export async function POST(req: NextRequest) {
       voiceId: persona.voiceId,
       personaName: persona.name,
       planSaved,
+      seasonPlanSaved,
     });
   } catch (err) {
     console.error("Chat API error:", err);
