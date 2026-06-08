@@ -12,6 +12,7 @@ type Profile = {
   player_notes: string;
   frankie_prefs: string;
   persona: PersonaKey;
+  goal: string;
 };
 
 type Club = {
@@ -30,6 +31,7 @@ export default function ProfilePage() {
     player_notes: "",
     frankie_prefs: "",
     persona: "frankie",
+    goal: "",
   });
   const [clubs, setClubs] = useState<Club[]>([]);
   const [editingClub, setEditingClub] = useState<string | null>(null);
@@ -59,6 +61,7 @@ export default function ProfilePage() {
           player_notes: profileRes.data.player_notes ?? "",
           frankie_prefs: profileRes.data.frankie_prefs ?? "",
           persona: (profileRes.data.persona as PersonaKey) ?? "frankie",
+          goal: profileRes.data.goal ?? "",
         });
         setAiNotes(profileRes.data.ai_notes ?? null);
       }
@@ -167,6 +170,16 @@ export default function ProfilePage() {
             <label className="block text-sm text-gray-400 mb-1">Home Course</label>
             <input value={profile.home_course} onChange={(e) => setProfile({ ...profile, home_course: e.target.value })}
               className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-lg focus:outline-none focus:border-green-500" placeholder="Augusta National (we can dream)" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">
+              Your Goal
+              <span className="ml-2 text-xs text-gray-600">What are you working toward this season?</span>
+            </label>
+            <input value={profile.goal} onChange={(e) => setProfile({ ...profile, goal: e.target.value })}
+              className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-lg focus:outline-none focus:border-green-500"
+              placeholder='e.g. "Break 90 by end of summer" or "Get to a 15 handicap"' />
+            <p className="text-xs text-gray-600 mt-1">Your caddy will keep this in mind and help you get there.</p>
           </div>
           <div>
             <label className="block text-sm text-gray-400 mb-1">

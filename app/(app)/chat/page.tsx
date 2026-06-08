@@ -30,12 +30,73 @@ export default function ChatPage() {
   const [planSavedToast, setPlanSavedToast] = useState(false);
   const [activeRound, setActiveRound] = useState<{ courseId: number; courseName: string; tee: string; conditions: string; } | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestionChips, setSuggestionChips] = useState<string[]>([]);
+  const [playerGoal, setPlayerGoal] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const transcriptRef = useRef<string>("");
   const currentVoiceIdRef = useRef<string>("FGY2WhTYpPnrIDTdsKH5");
+
+  function buildChips(goal: string | null): string[] {
+    const hour = new Date().getHours();
+    const isMorning = hour >= 5 && hour < 12;
+    const isEvening = hour >= 17;
+
+    // Bucket 1 — Goal (dynamic based on whether goal is set)
+    const goalBucket = goal
+      ? [`How am I tracking toward my goal?`, `What's the best thing I can do to reach my goal?`]
+      : [`What would a great golf season look like for me?`, `Help me set a goal for this season`, `I want to break 90 — where do I start?`];
+
+    // Bucket 2 — Fix something (rotating swing/technique)
+    const fixBucket = [
+      "Help me fix my driver",
+      "My irons are all over the place",
+      "My short game is costing me shots",
+      "I keep missing putts I should make",
+      "I struggle to get out of bunkers",
+      "My tempo falls apart under pressure",
+      "I hit it fat more than I'd like",
+      "I slice when I need a straight shot",
+    ];
+
+    // Bucket 3 — On course (time-of-day tinted)
+    const onCourseBucket = isMorning
+      ? ["What's a good warm-up before my round?", "I'm playing this morning — get me ready", "What should I focus on today?"]
+      : isEvening
+      ? ["I just finished a round — let's debrief", "Want to hear how my round went?", "Help me process what happened today"]
+      : ["I'm playing a round today", "Help me with course strategy", "What club should I hit from a specific yardage?"];
+
+    // Bucket 4 — Practice planning
+    const practiceBucket = [
+      "Build me a practice plan",
+      "I have 30 minutes at the range — what should I work on?",
+      "Help me make a short game practice routine",
+      "What's the highest-leverage thing to practice right now?",
+      "I'm going to the putting green — give me a drill",
+    ];
+
+    // Bucket 5 — Open / conversational
+    const openBucket = [
+      "What can you help me with?",
+      "Ask me how my game is going",
+      "I've been struggling lately — not sure what's wrong",
+      "Tell me something useful about golf",
+      "What's one thing most high-handicappers get wrong?",
+    ];
+
+    // Pick one from each bucket, shuffled within each bucket
+    const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
+
+    return [
+      pick(goalBucket),
+      pick(fixBucket),
+      pick(onCourseBucket),
+      pick(practiceBucket),
+      pick(openBucket),
+    ];
+  }
 
   useEffect(() => {
     async function init() {
@@ -45,7 +106,7 @@ export default function ChatPage() {
 
       const [messagesResult, profileResult] = await Promise.all([
         supabase.from("messages").select("id, role, content").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
-        supabase.from("profiles").select("name, handicap, home_course, persona").eq("id", user.id).single(),
+        supabase.from("profiles").select("name, handicap, home_course, persona, goal").eq("id", user.id).single(),
       ]);
 
       const existingMessages = (messagesResult.data ?? []).reverse();
@@ -64,8 +125,14 @@ export default function ChatPage() {
         currentVoiceIdRef.current = PERSONA_VOICES[profile.persona] ?? "FGY2WhTYpPnrIDTdsKH5";
       }
 
+      const goal = profile?.goal ?? null;
+      setPlayerGoal(goal);
+      const chips = buildChips(goal);
+      setSuggestionChips(chips);
+
       if (existingMessages.length > 0) {
         setMessages(existingMessages as Message[]);
+        setShowSuggestions(true); // show chips for returning users too
       } else {
         setAppState("thinking");
         try {
@@ -300,18 +367,18 @@ export default function ChatPage() {
           </div>
         ))}
 
-        {/* Suggestion chips — shown after first greeting, hidden once user sends anything */}
-        {showSuggestions && appState === "idle" && (
+        {/* Suggestion chips — shown every session, hidden once user sends anything */}
+        {showSuggestions && appState === "idle" && suggestionChips.length > 0 && (
           <div className="flex flex-col gap-2 mt-2">
-            <p className="text-xs text-gray-600 px-1">Try asking…</p>
+            {playerGoal ? (
+              <p className="text-xs text-gray-600 px-1">
+                🎯 Goal: <span className="text-gray-500 italic">{playerGoal}</span>
+              </p>
+            ) : (
+              <p className="text-xs text-gray-600 px-1">Try asking…</p>
+            )}
             <div className="flex flex-wrap gap-2">
-              {[
-                "Help me fix my driver",
-                "I'm playing a round today",
-                "Build me a practice plan",
-                "My short game needs work",
-                "What can you help me with?",
-              ].map((chip) => (
+              {suggestionChips.map((chip) => (
                 <button
                   key={chip}
                   onClick={() => sendMessage(chip)}

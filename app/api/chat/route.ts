@@ -80,6 +80,7 @@ function buildSystemPrompt(
     frankie_prefs?: string | null;
     gender?: string | null;
     age_bracket?: string | null;
+    goal?: string | null;
   },
   context: {
     isGreeting: boolean;
@@ -135,14 +136,23 @@ ${firstName} is new to working with you. You have ${context.messageCount} messag
   // Progressive profiling — what we still need to learn
   const needsGenderOrAge = context.missingProfileFields.includes("gender") || context.missingProfileFields.includes("age");
   const needsClubs = context.missingProfileFields.includes("clubs");
+  const needsGoal = context.missingProfileFields.includes("goal");
   const profilingContext = context.missingProfileFields.length > 0 ? `
-PROGRESSIVE PROFILING — YOU NEED TO ASK THESE QUESTIONS:
+PROGRESSIVE PROFILING — YOU NEED TO LEARN THESE THINGS:
 You still don't know: ${context.missingProfileFields.join(", ")}.
 ${needsGenderOrAge ? `
 AGE & GENDER — ask this in your NEXT response if you haven't already this session. Weave it in naturally at the end of whatever you're saying. Example: "By the way — to give you the best club recommendations, it helps to know a bit more about you. Are you a guy or a woman? And roughly what age range?" Just one casual question, friendly tone. Don't make it feel like a form.` : ""}
 ${needsClubs ? `
 CLUBS — once you know their age and gender (or if they've already answered), ask about their bag in your next 1-2 responses. Something like: "I've got some estimated distances for your clubs, but I'd love to know what you actually carry. What's in your bag? And do you have a rough sense of how far you hit your 7-iron?" Keep it conversational.` : ""}
+${needsGoal ? `
+PLAYER GOAL — this is important. Within the first few conversations, gently explore what the player is working toward this season. Ask something like: "What would a great golf season look like for you?" or "Do you have a number you're chasing — like breaking 90 or getting to a certain handicap?" Don't push if they're not interested — if they deflect, note it and move on. But for most players, having a goal changes everything about how you coach them. Ask only if the conversation has reached a natural moment. Never as a cold first question.` : ""}
 IMPORTANT: Ask only ONE thing per response. Never ask multiple questions at once. Don't repeat a question you've already asked this session.` : "";
+
+  const goalSection = profile.goal
+    ? `PLAYER'S SEASON GOAL: "${profile.goal}"
+This is what ${firstName} is working toward. Let it inform your coaching — connect advice, practice plans, and feedback to this goal where natural. Don't mention it every message, but it should be your north star. Celebrate progress toward it. Flag when something is directly relevant to achieving it.`
+    : `PLAYER GOAL: Not yet known.
+This is important context you're still missing. Within the first few sessions, explore what they're working toward. A good opener: "What would a great golf season look like for you?" Many players have a score they want to break — once you know their goal, everything you coach becomes more meaningful.`;
 
   return `${persona.personality}
 
@@ -156,9 +166,12 @@ Player profile:
 - Home course: ${profile.home_course}
 - Gender: ${profile.gender || "not yet known"}
 - Age group: ${profile.age_bracket || "not yet known"}
+- Season goal: ${profile.goal || "not yet set"}
 - Notes about their game: ${profile.player_notes || "none yet"}
 - AI coaching notes (auto-generated from past sessions): ${(profile as Record<string, string | null>).ai_notes || "none yet — will build over time"}
 ${profile.frankie_prefs ? `\nPersonal preferences from this player: ${profile.frankie_prefs}` : ""}
+
+${goalSection}
 ${clubSection}
 ${context.scorecardContext ? `\n${context.scorecardContext}` : ""}
 ${relationshipContext ? `\n${relationshipContext}` : ""}
@@ -203,18 +216,19 @@ async function extractProfile(
   anthropic: Anthropic,
   conversationText: string,
   existing: Record<string, string | null>
-): Promise<{ name?: string; handicap?: string; home_course?: string; gender?: string; age_bracket?: string }> {
+): Promise<{ name?: string; handicap?: string; home_course?: string; gender?: string; age_bracket?: string; goal?: string }> {
   try {
     const result = await anthropic.messages.create({
       model: "claude-sonnet-4-5",
-      max_tokens: 250,
+      max_tokens: 300,
       system: `Extract golf player profile information from this conversation. Return ONLY a JSON object with these fields (omit any field you're not confident about):
 - name: player's name
 - handicap: handicap index or skill description
 - home_course: name of their home course or where they usually play
 - gender: "male", "female", or "other" — only if clearly stated
 - age_bracket: "under_30", "30s", "40s", "50s", or "60_plus" — only if age or age range is mentioned
-Return only valid JSON. Example: {"name": "Jeff", "handicap": "39", "home_course": "Genesee Valley", "gender": "male", "age_bracket": "50s"}`,
+- goal: their season or improvement goal in their own words — e.g. "break 90 by end of summer", "get to a 15 handicap", "stop embarrassing myself at work scrambles". Only capture if clearly stated. Keep it short and in their voice.
+Return only valid JSON. Example: {"name": "Jeff", "handicap": "39", "home_course": "Genesee Valley", "gender": "male", "age_bracket": "50s", "goal": "break 80 this season"}`,
       messages: [{ role: "user", content: `Conversation:\n${conversationText}\n\nAlready known: ${JSON.stringify(existing)}` }],
     });
     const raw = result.content[0].type === "text" ? result.content[0].text.trim() : "{}";
@@ -393,7 +407,8 @@ export async function POST(req: NextRequest) {
     const needsExtraction = !isGreeting && (
       !isProfileComplete(profile as Record<string, string | null>) ||
       !profile.gender ||
-      !profile.age_bracket
+      !profile.age_bracket ||
+      !profile.goal
     );
 
     const [extractedProfile, recentTopics] = await Promise.all([
@@ -404,6 +419,7 @@ export async function POST(req: NextRequest) {
             home_course: profile.home_course ?? null,
             gender: profile.gender ?? null,
             age_bracket: profile.age_bracket ?? null,
+            goal: profile.goal ?? null,
           })
         : Promise.resolve({}),
       isReturningUser && history.length > 0
@@ -418,6 +434,7 @@ export async function POST(req: NextRequest) {
         home_course: (extractedProfile as Record<string, string>).home_course || profile.home_course || null,
         gender: (extractedProfile as Record<string, string>).gender || profile.gender || null,
         age_bracket: (extractedProfile as Record<string, string>).age_bracket || profile.age_bracket || null,
+        goal: (extractedProfile as Record<string, string>).goal || profile.goal || null,
       };
 
       const hasChanges = Object.keys(updated).some(k => updated[k] !== (profile as Record<string, string | null>)[k]);
@@ -429,6 +446,7 @@ export async function POST(req: NextRequest) {
           frankie_prefs: profile.frankie_prefs,
           persona: profile.persona || "frankie",
           clubs_seeded: profile.clubs_seeded ?? false,
+          goal: updated.goal,
           updated_at: new Date().toISOString(),
         });
         if (upsertError) console.error("Profile upsert error:", upsertError);
@@ -474,6 +492,7 @@ export async function POST(req: NextRequest) {
     if (!profile.gender) missingProfileFields.push("gender");
     if (!profile.age_bracket) missingProfileFields.push("age");
     if (clubs.length === 0) missingProfileFields.push("clubs");
+    if (!profile.goal) missingProfileFields.push("goal");
 
     // Build system prompt
     const profileComplete = isProfileComplete(profile as Record<string, string | null>);
