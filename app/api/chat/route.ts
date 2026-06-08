@@ -87,7 +87,21 @@ function buildSystemPrompt(
     messageCount: number;
     lastActiveAt: string | null;
     recentTopics: string;
-    clubs: Array<{ club_name: string; expected_distance: number; distance_source: string }>;
+    clubs: Array<{
+    club_name: string;
+    expected_distance: number;
+    carry_distance?: number | null;
+    distance_source: string;
+    brand?: string | null;
+    club_model?: string | null;
+    loft?: number | null;
+    lie_angle?: number | null;
+    shaft_flex?: string | null;
+    shaft_material?: string | null;
+    confidence?: number | null;
+    typical_shape?: string | null;
+    notes?: string | null;
+  }>;
     missingProfileFields: string[];
     scorecardContext: string;
     planIngredients: PlanIngredients;
@@ -128,12 +142,39 @@ ${firstName} is new to working with you. You have ${context.messageCount} messag
 - Ask questions to learn more about their game — what they struggle with, what they enjoy, their goals.`;
   }
 
-  // Build club distances section
-  const clubSection = context.clubs.length > 0
-    ? `\nPlayer's club distances:\n${context.clubs.map(c =>
-        `- ${c.club_name}: ${c.expected_distance} yards${c.distance_source === "demographic_default" ? " (estimated)" : " (confirmed)"}`
-      ).join("\n")}\nUse these distances when making club recommendations. If a distance seems off based on what the player tells you, update your recommendation accordingly.`
-    : "";
+  // Build club section — richer when data is available
+  const clubSection = context.clubs.length > 0 ? (() => {
+    const lines = context.clubs.map(c => {
+      const estimated = c.distance_source === "demographic_default";
+      const equipment = (c.brand && c.club_model) ? `${c.brand} ${c.club_model}` : null;
+      const specs: string[] = [];
+      if (c.loft) specs.push(`${c.loft}°`);
+      if (c.lie_angle) specs.push(`lie ${c.lie_angle}°`);
+      if (c.shaft_flex) specs.push(c.shaft_flex);
+      if (c.shaft_material) specs.push(c.shaft_material);
+      const specsStr = specs.length > 0 ? ` (${specs.join(", ")})` : "";
+      const distStr = c.carry_distance
+        ? `carry ${c.carry_distance} | total ${c.expected_distance} yds`
+        : `${c.expected_distance} yds${estimated ? " (estimated)" : ""}`;
+      const feel: string[] = [];
+      if (c.confidence) feel.push(`confidence ${c.confidence}/5`);
+      if (c.typical_shape) feel.push(`shape: ${c.typical_shape.toLowerCase()}`);
+      const feelStr = feel.length > 0 ? ` [${feel.join(", ")}]` : "";
+      const notesStr = c.notes ? ` — ${c.notes}` : "";
+      const equipStr = equipment ? ` ${equipment}${specsStr}` : "";
+      return `- ${c.club_name}:${equipStr} ${distStr}${feelStr}${notesStr}`;
+    }).join("\n");
+
+    const hasConfidence = context.clubs.some(c => c.confidence);
+    const hasShape = context.clubs.some(c => c.typical_shape);
+
+    let guidance = "Use these distances when recommending clubs.";
+    if (hasConfidence) guidance += " Respect confidence ratings — avoid recommending low-confidence clubs in pressure situations unless the player asks.";
+    if (hasShape) guidance += " Account for shot shape when advising on aim and club selection — a player who fades the driver should aim accordingly.";
+    guidance += " If a distance seems off based on what the player tells you, trust what they say over the data.";
+
+    return `\nPlayer's bag:\n${lines}\n${guidance}`;
+  })() : "";
 
   // Progressive profiling — what we still need to learn
   const needsGenderOrAge = context.missingProfileFields.includes("gender") || context.missingProfileFields.includes("age");
@@ -532,7 +573,7 @@ export async function POST(req: NextRequest) {
       supabase.from("messages").select("role, content, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20),
       supabase.from("settings").select("value").eq("key", "base_prompt").single(),
       supabase.from("messages").select("id", { count: "exact", head: true }).eq("user_id", user.id),
-      supabase.from("clubs").select("club_name, expected_distance, distance_source").eq("user_id", user.id).order("sort_order"),
+      supabase.from("clubs").select("club_name, expected_distance, carry_distance, distance_source, brand, club_model, loft, lie_angle, shaft_flex, shaft_material, confidence, typical_shape, notes").eq("user_id", user.id).order("sort_order"),
     ]);
 
     let profile = profileResult.data ?? {};
