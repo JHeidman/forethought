@@ -673,7 +673,17 @@ export async function POST(req: NextRequest) {
           clubs = clubsToInsert.map(c => ({
             club_name: c.club_name,
             expected_distance: c.expected_distance,
+            carry_distance: null,
             distance_source: c.distance_source,
+            brand: null,
+            club_model: null,
+            loft: null,
+            lie_angle: null,
+            shaft_flex: null,
+            shaft_material: null,
+            confidence: null,
+            typical_shape: null,
+            notes: null,
           }));
         }
       }
