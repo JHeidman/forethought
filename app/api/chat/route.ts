@@ -10,6 +10,7 @@ import { getCourseDetail, formatScorecardForPrompt } from "@/lib/golf-course-api
 import { getMainModel, getUtilityModel } from "@/lib/model-router";
 import { assessShotDistance } from "@/lib/gps";
 import { matchClubToBag } from "@/lib/shot-detection";
+import { buildAnnouncementsBlock, type AnnouncementItem } from "@/lib/announcements";
 
 // Windows/Turbopack workaround
 function getEnvVar(name: string): string {
@@ -756,31 +757,6 @@ const noteShotTool: Anthropic.Tool = {
   },
 };
 
-// Build the system prompt block that tells Frankie about unread announcements
-function buildAnnouncementsBlock(
-  announcements: Array<{ id: string; version: string; title: string; summary: string; detail: string }>,
-  firstName: string
-): string {
-  if (announcements.length === 0) return "";
-
-  const items = announcements.map(a => `- ${a.title}: ${a.summary}`).join("\n");
-
-  return `NEW FEATURES TO MENTION:
-There are ${announcements.length} new thing${announcements.length > 1 ? "s" : ""} in the app since ${firstName} last visited. Work them into your opening naturally — don't lead with a news bulletin. After your warm greeting, mention it conversationally:
-
-"Oh — a few things have changed since you were last here. [1–2 sentence natural summary]. Want me to walk you through any of them?"
-
-Keep it light and brief — you're mentioning it, not presenting a changelog. If they say yes, you can give more detail from the details below.
-
-What's new:
-${items}
-
-Full details (for when they ask):
-${announcements.map(a => `${a.title} (${a.version}): ${a.detail}`).join("\n\n")}
-
-After you deliver this, don't bring it up again — it's a one-time welcome-back note.`;
-}
-
 // Fire-and-forget: save a completed shot to shot_history
 async function saveShotToHistory(
   userId: string,
@@ -872,8 +848,7 @@ export async function POST(req: NextRequest) {
       : [];
     let planIngredients: PlanIngredients = (profile.plan_ingredients as PlanIngredients) ?? {};
     const seasonPlan: string | null = profile.season_plan ?? null;
-    type AnnouncementRow = { id: string; version: string; title: string; summary: string; detail: string };
-    const unreadAnnouncements: AnnouncementRow[] = (announcementsResult as { data: AnnouncementRow[] }).data ?? [];
+    const unreadAnnouncements: AnnouncementItem[] = (announcementsResult as { data: AnnouncementItem[] }).data ?? [];
 
     // Save user message (skip for greeting)
     if (!isGreeting) {
@@ -1326,7 +1301,7 @@ export async function POST(req: NextRequest) {
 
     // Fire-and-forget: mark announcements as read now that Frankie has delivered them
     if (isGreeting && unreadAnnouncements.length > 0) {
-      const ids = unreadAnnouncements.map((a: AnnouncementRow) => a.id);
+      const ids = unreadAnnouncements.map((a: AnnouncementItem) => a.id);
       supabase.from("user_announcement_reads")
         .upsert(ids.map((id: string) => ({ user_id: user.id, announcement_id: id })), { onConflict: "user_id,announcement_id" })
         .then(() => {}) // intentionally not awaited
