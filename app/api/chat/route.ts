@@ -8,6 +8,8 @@ import { getPersona } from "@/lib/personas";
 import { seedClubs, type Gender, type AgeGroup } from "@/lib/club-defaults";
 import { getCourseDetail, formatScorecardForPrompt } from "@/lib/golf-course-api";
 import { getMainModel, getUtilityModel } from "@/lib/model-router";
+import { assessShotDistance } from "@/lib/gps";
+import { matchClubToBag } from "@/lib/shot-detection";
 
 // Windows/Turbopack workaround
 function getEnvVar(name: string): string {
@@ -556,9 +558,91 @@ Write directly to the player. Be honest. If they said they never practice, build
   },
 };
 
+type ShotContext = {
+  announcedClub: string;
+  lastShotClub: string | null;
+  lastShotDistanceYards: number | null;
+  lastShotGpsStart: { lat: number; lon: number } | null;
+  lastShotGpsEnd: { lat: number; lon: number } | null;
+  gpsAccuracyMeters: number | null;
+};
+
+function buildShotTrackingBlock(
+  shotContext: ShotContext,
+  clubs: Array<{ club_name: string; expected_distance: number }>
+): string {
+  const lines: string[] = ["SHOT TRACKING (this message):"];
+  lines.push(`Player is about to hit: ${shotContext.announcedClub}`);
+
+  const accuracyOk = shotContext.gpsAccuracyMeters !== null && shotContext.gpsAccuracyMeters <= 20;
+  if (shotContext.gpsAccuracyMeters !== null) {
+    lines.push(`GPS accuracy: ${Math.round(shotContext.gpsAccuracyMeters)}m ${accuracyOk ? "(reliable)" : "(poor — distance reading may be off)"}`);
+  }
+
+  if (shotContext.lastShotClub && shotContext.lastShotDistanceYards !== null) {
+    const matchedClub = matchClubToBag(shotContext.lastShotClub, clubs);
+    const clubData = clubs.find(c => c.club_name.toLowerCase() === matchedClub.toLowerCase());
+    const expected = clubData?.expected_distance ?? 0;
+    const measured = shotContext.lastShotDistanceYards;
+
+    lines.push(`\nPrevious shot: ${shotContext.lastShotClub}`);
+    lines.push(`  GPS-measured distance: ${measured} yards`);
+    if (expected > 0) lines.push(`  Expected distance: ${expected} yards`);
+
+    if (accuracyOk && measured > 15) {
+      const assessment = assessShotDistance(measured, expected);
+      lines.push(`  Assessment: ${assessment.label}`);
+
+      if (assessment.isOutlier) {
+        if (assessment.isShort) {
+          lines.push(`\nThis shot was significantly shorter than expected. Ask naturally — one brief question — something like: "That ${shotContext.lastShotClub} came up short — mishit, or did it hit something?" If they confirm a mishit, note it. Don't lecture.`);
+        } else {
+          lines.push(`\nThis shot was significantly longer than expected. Ask naturally — one brief question — something like: "That ${shotContext.lastShotClub} went a long way — perfect strike, or did it get a bounce?" If it was genuinely good contact, update your mental model.`);
+        }
+      } else {
+        lines.push(`Distance is normal — no need to comment on it. Just give pre-shot advice for the ${shotContext.announcedClub}.`);
+      }
+    } else if (!accuracyOk) {
+      lines.push(`GPS accuracy was poor — don't report or comment on this distance. Just give pre-shot advice.`);
+    } else if (measured <= 15) {
+      lines.push(`Distance too short to be a real shot (likely just walking) — ignore it.`);
+    }
+  } else {
+    lines.push(`\nNo previous shot data yet this round — this is likely the first shot or tee shot.`);
+  }
+
+  return lines.join("\n");
+}
+
+// Fire-and-forget: save a completed shot to shot_history
+async function saveShotToHistory(
+  userId: string,
+  shotContext: ShotContext,
+  supabaseUrl: string,
+  supabaseKey: string
+): Promise<void> {
+  if (!shotContext.lastShotClub || shotContext.lastShotDistanceYards === null) return;
+  try {
+    const { createClient } = await import("@supabase/supabase-js");
+    const client = createClient(supabaseUrl, supabaseKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    await client.from("shot_history").insert({
+      user_id: userId,
+      club_name: shotContext.lastShotClub,
+      distance_yards: shotContext.lastShotDistanceYards,
+      gps_start: shotContext.lastShotGpsStart,
+      gps_end: shotContext.lastShotGpsEnd,
+      source: "on_course",
+    });
+  } catch (err) {
+    console.error("saveShotToHistory error:", err);
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { message, isGreeting, roundContext } = await req.json();
+    const { message, isGreeting, roundContext, shotContext } = await req.json();
     // roundContext: { courseId, courseName, tee, conditions } — injected when player is on course
     if (!message?.trim()) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
@@ -757,6 +841,11 @@ export async function POST(req: NextRequest) {
         })
       : buildOnboardingPrompt(profile, isGreeting || history.length === 0);
 
+    // Append shot tracking block when player announces a club on-course
+    const finalSystemPrompt = (shotContext?.announcedClub && systemPromptText)
+      ? `${systemPromptText}\n\n${buildShotTrackingBlock(shotContext as ShotContext, clubs)}`
+      : systemPromptText;
+
     // Detect video/media URLs
     const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
     const VIDEO_HOSTS = ["icloud.com", "photos.google.com", "youtube.com", "youtu.be", "vimeo.com", "dropbox.com", "drive.google.com"];
@@ -794,7 +883,7 @@ export async function POST(req: NextRequest) {
     const response = await anthropic.messages.create({
       model: activeModel,
       max_tokens: 1024,
-      system: [{ type: "text", text: systemPromptText, cache_control: { type: "ephemeral" } }],
+      system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
       tools: [savePlanTool, saveSeasonPlanTool],
       messages: apiMessages,
     });
@@ -820,7 +909,7 @@ export async function POST(req: NextRequest) {
         const followUp = await anthropic.messages.create({
           model: activeModel,
           max_tokens: 512,
-          system: [{ type: "text", text: systemPromptText, cache_control: { type: "ephemeral" } }],
+          system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
           tools: [savePlanTool, saveSeasonPlanTool],
           messages: [
             ...apiMessages,
@@ -852,7 +941,7 @@ export async function POST(req: NextRequest) {
         const followUp = await anthropic.messages.create({
           model: activeModel,
           max_tokens: 512,
-          system: [{ type: "text", text: systemPromptText, cache_control: { type: "ephemeral" } }],
+          system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
           tools: [savePlanTool, saveSeasonPlanTool],
           messages: [
             ...apiMessages,
@@ -889,6 +978,16 @@ export async function POST(req: NextRequest) {
     }
 
     await supabase.from("messages").insert({ user_id: user.id, role: "assistant", content: reply });
+
+    // Fire-and-forget: save completed shot to history when player announces a club
+    if (shotContext?.lastShotClub && shotContext?.lastShotDistanceYards !== null) {
+      saveShotToHistory(
+        user.id,
+        shotContext as ShotContext,
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        getEnvVar("SUPABASE_SERVICE_ROLE_KEY")
+      ); // intentionally not awaited
+    }
 
     // Fire-and-forget: update AI notes every 10 messages (no latency impact)
     const newMessageCount = messageCount + 2; // user + assistant just added

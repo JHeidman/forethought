@@ -4,6 +4,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import CourseMode from "@/components/CourseMode";
+import { haversineYards } from "@/lib/gps";
+import { detectShotAnnouncement } from "@/lib/shot-detection";
 
 type Message = {
   id: string;
@@ -39,6 +41,11 @@ export default function ChatPage() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const transcriptRef = useRef<string>("");
   const currentVoiceIdRef = useRef<string>("FGY2WhTYpPnrIDTdsKH5");
+
+  // GPS + shot tracking refs (refs not state — updates don't need re-renders)
+  const gpsWatchIdRef = useRef<number | null>(null);
+  const currentGpsRef = useRef<{ lat: number; lon: number; accuracyMeters: number } | null>(null);
+  const lastShotRef = useRef<{ club: string; gps: { lat: number; lon: number } } | null>(null);
 
   function buildChips(goal: string | null): string[] {
     const hour = new Date().getHours();
@@ -164,6 +171,38 @@ export default function ChatPage() {
     init();
   }, []);
 
+  // Start/stop GPS watch when round state changes
+  useEffect(() => {
+    if (activeRound && "geolocation" in navigator) {
+      gpsWatchIdRef.current = navigator.geolocation.watchPosition(
+        (pos) => {
+          currentGpsRef.current = {
+            lat: pos.coords.latitude,
+            lon: pos.coords.longitude,
+            accuracyMeters: pos.coords.accuracy,
+          };
+        },
+        (err) => console.warn("GPS error:", err.message),
+        { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+      );
+    } else {
+      // Round ended — clear watch and shot history
+      if (gpsWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+        gpsWatchIdRef.current = null;
+      }
+      currentGpsRef.current = null;
+      lastShotRef.current = null;
+    }
+
+    return () => {
+      if (gpsWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+        gpsWatchIdRef.current = null;
+      }
+    };
+  }, [activeRound]);
+
   const isInitialLoad = useRef(true);
   useEffect(() => {
     const behavior = isInitialLoad.current ? "auto" : "smooth";
@@ -223,11 +262,61 @@ export default function ChatPage() {
     const tempId = crypto.randomUUID();
     setMessages((prev) => [...prev, { id: tempId, role: "user", content: trimmed }]);
 
+    // Build shot context if on-course and player is announcing a club
+    let shotContext: {
+      announcedClub: string;
+      lastShotClub: string | null;
+      lastShotDistanceYards: number | null;
+      lastShotGpsStart: { lat: number; lon: number } | null;
+      lastShotGpsEnd: { lat: number; lon: number } | null;
+      gpsAccuracyMeters: number | null;
+    } | null = null;
+
+    if (activeRound) {
+      const announcedClub = detectShotAnnouncement(trimmed);
+      if (announcedClub) {
+        const currentGps = currentGpsRef.current;
+
+        if (lastShotRef.current && currentGps) {
+          // Calculate distance of the PREVIOUS shot
+          const distYards = haversineYards(
+            lastShotRef.current.gps.lat, lastShotRef.current.gps.lon,
+            currentGps.lat, currentGps.lon
+          );
+          shotContext = {
+            announcedClub,
+            lastShotClub: lastShotRef.current.club,
+            lastShotDistanceYards: distYards,
+            lastShotGpsStart: lastShotRef.current.gps,
+            lastShotGpsEnd: { lat: currentGps.lat, lon: currentGps.lon },
+            gpsAccuracyMeters: currentGps.accuracyMeters,
+          };
+        } else {
+          shotContext = {
+            announcedClub,
+            lastShotClub: null,
+            lastShotDistanceYards: null,
+            lastShotGpsStart: null,
+            lastShotGpsEnd: null,
+            gpsAccuracyMeters: currentGps?.accuracyMeters ?? null,
+          };
+        }
+
+        // Snapshot current position as the start of this new shot
+        if (currentGps) {
+          lastShotRef.current = {
+            club: announcedClub,
+            gps: { lat: currentGps.lat, lon: currentGps.lon },
+          };
+        }
+      }
+    }
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed, roundContext: activeRound }),
+        body: JSON.stringify({ message: trimmed, roundContext: activeRound, shotContext }),
       });
       const data = await res.json();
 
