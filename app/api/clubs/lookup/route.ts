@@ -4,6 +4,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import fs from "fs";
 import path from "path";
+import { getUtilityModel } from "@/lib/model-router";
 
 function getEnvVar(name: string): string {
   const fromEnv = process.env[name];
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
     const anthropic = new Anthropic({ apiKey: getEnvVar("ANTHROPIC_API_KEY") });
 
     const result = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
+      model: getUtilityModel(),
       max_tokens: 400,
       system: `You are a golf equipment specification database. Return ONLY a JSON object with standard specs for the given club. Only include fields you are confident about — do not guess.
 

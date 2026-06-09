@@ -7,6 +7,7 @@ import path from "path";
 import { getPersona } from "@/lib/personas";
 import { seedClubs, type Gender, type AgeGroup } from "@/lib/club-defaults";
 import { getCourseDetail, formatScorecardForPrompt } from "@/lib/golf-course-api";
+import { getMainModel, getUtilityModel } from "@/lib/model-router";
 
 // Windows/Turbopack workaround
 function getEnvVar(name: string): string {
@@ -262,7 +263,7 @@ SCOPE — STAY ON GOLF:
 async function generateSpeech(anthropic: Anthropic, fullReply: string): Promise<string> {
   try {
     const result = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
+      model: getUtilityModel(),
       max_tokens: 100,
       system: "You summarize golf caddy responses into 1-2 short spoken sentences for text-to-speech. Be conversational, natural, and lead with the key point. No lists, no markdown.",
       messages: [{ role: "user", content: `Summarize this for speech (1-2 sentences max):\n\n${fullReply}` }],
@@ -281,7 +282,7 @@ async function extractProfile(
 ): Promise<{ name?: string; handicap?: string; home_course?: string; gender?: string; age_bracket?: string; goal?: string }> {
   try {
     const result = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
+      model: getUtilityModel(),
       max_tokens: 300,
       system: `Extract golf player profile information from this conversation. Return ONLY a JSON object with these fields (omit any field you're not confident about):
 - name: player's name
@@ -310,7 +311,7 @@ async function summarizeRecentTopics(
   if (recentMessages.length === 0) return "";
   try {
     const result = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
+      model: getUtilityModel(),
       max_tokens: 80,
       system: "Summarize what was being discussed in this golf coaching conversation in one short phrase (e.g. 'weight transfer and iron contact', 'course management on par 3s', 'building a practice plan'). Be specific. Return only the phrase, no punctuation.",
       messages: [{
@@ -356,7 +357,7 @@ async function updateAiNotes(
     const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
     const result = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
+      model: getUtilityModel(),
       max_tokens: 300,
       system: `You are reviewing a golf coaching conversation to extract key insights about this player's game.
 
@@ -483,7 +484,7 @@ async function extractPlanIngredients(
 ): Promise<PlanIngredients> {
   try {
     const result = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
+      model: getUtilityModel(),
       max_tokens: 200,
       system: `Extract golf improvement plan information from this conversation. Return ONLY a JSON object with these fields (omit any you're not confident about — do not guess):
 - scoring_range: what they typically shoot, e.g. "98-104", "low 90s", "mid-80s"
@@ -779,8 +780,10 @@ export async function POST(req: NextRequest) {
     ];
 
     // API call
+    const isOnCourse = !!roundContext?.courseId;
+    const activeModel = getMainModel(isOnCourse);
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
+      model: activeModel,
       max_tokens: 1024,
       system: [{ type: "text", text: systemPromptText, cache_control: { type: "ephemeral" } }],
       tools: [savePlanTool, saveSeasonPlanTool],
@@ -806,7 +809,7 @@ export async function POST(req: NextRequest) {
         planSaved = true;
 
         const followUp = await anthropic.messages.create({
-          model: "claude-sonnet-4-5",
+          model: activeModel,
           max_tokens: 512,
           system: [{ type: "text", text: systemPromptText, cache_control: { type: "ephemeral" } }],
           tools: [savePlanTool, saveSeasonPlanTool],
@@ -838,7 +841,7 @@ export async function POST(req: NextRequest) {
         seasonPlanSaved = true;
 
         const followUp = await anthropic.messages.create({
-          model: "claude-sonnet-4-5",
+          model: activeModel,
           max_tokens: 512,
           system: [{ type: "text", text: systemPromptText, cache_control: { type: "ephemeral" } }],
           tools: [savePlanTool, saveSeasonPlanTool],
