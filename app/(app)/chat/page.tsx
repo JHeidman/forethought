@@ -14,6 +14,7 @@ type Message = {
 };
 
 type AppState = "idle" | "listening" | "thinking" | "speaking";
+type ListenMode = "address" | "solo" | "interact" | "interact-vad";
 
 export default function ChatPage() {
   const router = useRouter();
@@ -22,6 +23,12 @@ export default function ChatPage() {
   const [appState, setAppState] = useState<AppState>("idle");
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
+  const [listenMode, setListenMode] = useState<ListenMode>(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("frankieListenMode") as ListenMode) ?? "address";
+    }
+    return "address";
+  });
   const [muted, setMuted] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("frankieMuted") === "true";
@@ -46,6 +53,14 @@ export default function ChatPage() {
   const gpsWatchIdRef = useRef<number | null>(null);
   const currentGpsRef = useRef<{ lat: number; lon: number; accuracyMeters: number } | null>(null);
   const lastShotRef = useRef<{ club: string; gps: { lat: number; lon: number } } | null>(null);
+
+  // Voice mode refs — needed so async recognition callbacks always see latest values
+  const listenModeRef = useRef<ListenMode>(listenMode);
+  const personaNameRef = useRef<string>("Frankie");
+  const autoListenActiveRef = useRef(false);   // true when address/solo loop is running
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wakeLockRef = useRef<any>(null);
 
   function buildChips(goal: string | null): string[] {
     const hour = new Date().getHours();
@@ -203,6 +218,40 @@ export default function ChatPage() {
     };
   }, [activeRound]);
 
+  // Keep mode refs in sync with state
+  useEffect(() => { listenModeRef.current = listenMode; }, [listenMode]);
+  useEffect(() => { personaNameRef.current = personaName; }, [personaName]);
+
+  // Persist listen mode
+  useEffect(() => { localStorage.setItem("frankieListenMode", listenMode); }, [listenMode]);
+
+  // Wake lock — keep screen on during auto-listen modes
+  useEffect(() => {
+    const isAutoMode = listenMode === "address" || listenMode === "solo";
+    if (isAutoMode && autoListenActiveRef.current && "wakeLock" in navigator) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (navigator as any).wakeLock.request("screen")
+        .then((lock: any) => { wakeLockRef.current = lock; })
+        .catch(() => {});
+    } else {
+      wakeLockRef.current?.release().catch(() => {});
+      wakeLockRef.current = null;
+    }
+  }, [listenMode]);
+
+  // Name check helpers for address mode
+  function containsPersonaName(transcript: string, name: string): boolean {
+    const t = transcript.toLowerCase();
+    const n = name.toLowerCase();
+    return t.includes(n);
+  }
+
+  function stripPersonaName(transcript: string, name: string): string {
+    return transcript
+      .replace(new RegExp(`^(hey\\s+|ok\\s+|okay\\s+)?${name}[,.]?\\s*`, "i"), "")
+      .trim();
+  }
+
   const isInitialLoad = useRef(true);
   useEffect(() => {
     const behavior = isInitialLoad.current ? "auto" : "smooth";
@@ -249,6 +298,11 @@ export default function ChatPage() {
       // Silently fail — text is still shown
     } finally {
       setAppState("idle");
+      // Auto-restart mic in looping modes after Frankie finishes speaking
+      const mode = listenModeRef.current;
+      if (autoListenActiveRef.current && (mode === "address" || mode === "solo")) {
+        setTimeout(() => startListening(true), 800); // slight delay so mic doesn't catch audio echo
+      }
     }
   }
 
@@ -348,20 +402,25 @@ export default function ChatPage() {
     }
   }, [appState]);
 
-  function startListening() {
-    if (appState !== "idle") return;
+  function startListening(isAutoRestart = false) {
+    if (appState !== "idle" && !isAutoRestart) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
     const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
     if (!SR) return;
 
+    const mode = listenModeRef.current;
     transcriptRef.current = "";
+    setInput("");
     const recognition = new SR();
-    recognition.continuous = true;
+
+    // Hold mode keeps mic open continuously; all others use single-utterance mode
+    recognition.continuous = mode === "interact";
     recognition.interimResults = true;
     recognition.lang = "en-US";
 
     recognition.onstart = () => setAppState("listening");
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onresult = (event: any) => {
       let final = "";
@@ -374,27 +433,142 @@ export default function ChatPage() {
         if (!event.results[i].isFinal) interim += event.results[i][0].transcript;
       }
       setInput(interim.trim());
+
+      // Hold mode: reset the safety inactivity timer on every result
+      if (mode === "interact") {
+        if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = setTimeout(() => {
+          // Player forgot to untoggle — stop silently without sending
+          recognitionRef.current?.stop();
+          recognitionRef.current = null;
+          transcriptRef.current = "";
+          setInput("");
+          setAppState("idle");
+        }, 30000);
+      }
     };
-    recognition.onerror = () => setAppState("idle");
+
+    recognition.onend = () => {
+      const currentMode = listenModeRef.current;
+      const transcript = transcriptRef.current.trim();
+
+      if (currentMode === "address") {
+        const name = personaNameRef.current;
+        if (transcript && containsPersonaName(transcript, name)) {
+          const stripped = stripPersonaName(transcript, name);
+          if (stripped) {
+            sendMessage(stripped);
+          } else {
+            setAppState("idle");
+            // Name only, no message — restart and wait
+            if (autoListenActiveRef.current) setTimeout(() => startListening(true), 600);
+          }
+        } else {
+          // Not addressed to Frankie — discard and restart
+          setAppState("idle");
+          if (autoListenActiveRef.current) setTimeout(() => startListening(true), 600);
+        }
+      } else if (currentMode === "solo") {
+        const wordCount = transcript.split(/\s+/).filter(Boolean).length;
+        if (transcript && wordCount >= 2) {
+          sendMessage(transcript);
+        } else {
+          // Too short (ambient noise) — restart
+          setAppState("idle");
+          if (autoListenActiveRef.current) setTimeout(() => startListening(true), 600);
+        }
+      } else if (currentMode === "interact-vad") {
+        // Auto-send when speech ends
+        if (transcript) sendMessage(transcript);
+        else setAppState("idle");
+        // No auto-restart — player taps for each message
+      }
+      // "interact" mode onend is handled by stopListening() manually
+    };
+
+    recognition.onerror = (event: { error: string }) => {
+      const currentMode = listenModeRef.current;
+      if (event.error === "no-speech" && autoListenActiveRef.current &&
+          (currentMode === "address" || currentMode === "solo")) {
+        // Normal timeout in looping modes — just restart quietly
+        setAppState("idle");
+        setTimeout(() => startListening(true), 400);
+      } else {
+        setAppState("idle");
+      }
+    };
+
     recognitionRef.current = recognition;
     recognition.start();
   }
 
   function stopListening() {
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    }
     recognitionRef.current?.stop();
     recognitionRef.current = null;
-    const transcript = transcriptRef.current.trim() || input.trim();
-    if (transcript) sendMessage(transcript);
-    else setAppState("idle");
+
+    const mode = listenModeRef.current;
+    if (mode === "interact") {
+      // Manual stop — send whatever was accumulated
+      const transcript = transcriptRef.current.trim() || input.trim();
+      if (transcript) sendMessage(transcript);
+      else setAppState("idle");
+    } else {
+      // For other modes, onend handles sending — just clean up
+      setAppState("idle");
+    }
   }
 
   function toggleListening() {
-    if (appState === "listening") stopListening();
-    else if (appState === "idle") startListening();
+    const mode = listenModeRef.current;
+
+    if (appState === "listening") {
+      if (mode === "interact") {
+        stopListening(); // manual stop + send
+      } else if (mode === "address" || mode === "solo") {
+        // Stop the auto-loop entirely
+        autoListenActiveRef.current = false;
+        recognitionRef.current?.stop();
+        recognitionRef.current = null;
+        wakeLockRef.current?.release().catch(() => {});
+        wakeLockRef.current = null;
+        setAppState("idle");
+      } else {
+        stopListening();
+      }
+    } else if (appState === "idle") {
+      if (mode === "address" || mode === "solo") {
+        // Activate auto-loop
+        autoListenActiveRef.current = true;
+        // Acquire wake lock to keep screen on
+        if ("wakeLock" in navigator) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (navigator as any).wakeLock.request("screen")
+            .then((lock: any) => { wakeLockRef.current = lock; })
+            .catch(() => {});
+        }
+        startListening();
+      } else {
+        startListening();
+      }
+    }
   }
 
   function stopSpeaking() {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    setAppState("idle");
+  }
+
+  function deactivateAutoListen() {
+    autoListenActiveRef.current = false;
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    wakeLockRef.current?.release().catch(() => {});
+    wakeLockRef.current = null;
+    if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
     setAppState("idle");
   }
 
@@ -513,16 +687,56 @@ export default function ChatPage() {
 
       {/* Voice Mode */}
       {voiceMode ? (
-        <div className="shrink-0 border-t border-gray-800 px-4 py-6 flex flex-col items-center gap-4">
+        <div className="shrink-0 border-t border-gray-800 px-4 pt-3 pb-6 flex flex-col items-center gap-3">
+
+          {/* Listen mode selector */}
+          <div className="flex gap-1.5 w-full">
+            {([
+              { mode: "address" as ListenMode, label: "Named",  title: `Say "${personaName}" first` },
+              { mode: "solo"    as ListenMode, label: "Solo",   title: "Always listening — no name needed" },
+              { mode: "interact" as ListenMode, label: "Hold",  title: "Tap to start, tap to send" },
+              { mode: "interact-vad" as ListenMode, label: "Auto", title: "Tap once, sends when you stop talking" },
+            ]).map(({ mode, label, title }) => (
+              <button
+                key={mode}
+                title={title}
+                onClick={() => {
+                  if (autoListenActiveRef.current) deactivateAutoListen();
+                  setListenMode(mode);
+                }}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  listenMode === mode
+                    ? "bg-green-700 text-white"
+                    : "bg-gray-800 text-gray-500 hover:text-gray-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Mode hint */}
+          <p className="text-xs text-gray-600 text-center h-4">
+            {listenMode === "address" && `Say "${personaName}" to send`}
+            {listenMode === "solo"    && "Looping — tap mic to stop"}
+            {listenMode === "interact" && "Tap mic · speak · tap to send · auto-stops after 30s"}
+            {listenMode === "interact-vad" && "Tap mic · speak · sends when you go quiet"}
+          </p>
+
+          {/* Interim transcript */}
           {input && appState === "listening" && (
             <p className="text-gray-400 text-sm text-center italic max-w-xs">{input}</p>
           )}
+
+          {/* State label */}
           <p className={`text-sm font-medium ${
             appState === "listening" ? "text-green-400" :
-            appState === "speaking" ? "text-blue-400" :
-            appState === "thinking" ? "text-yellow-400" : "text-gray-500"
+            appState === "speaking"  ? "text-blue-400"  :
+            appState === "thinking"  ? "text-yellow-400" : "text-gray-500"
           }`}>
-            {stateLabel[appState]}
+            {listenMode === "address" && appState === "listening"
+              ? `Listening for "${personaName}"…`
+              : stateLabel[appState]}
           </p>
 
           {appState === "speaking" ? (
@@ -537,9 +751,13 @@ export default function ChatPage() {
               onClick={toggleListening}
               disabled={appState === "thinking"}
               className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all ${
-                appState === "listening" ? "bg-red-600 scale-110 ring-4 ring-red-400 ring-opacity-50" :
-                appState === "thinking" ? "bg-gray-700 opacity-50 cursor-not-allowed" :
-                "bg-green-600 hover:bg-green-500 active:scale-95"
+                appState === "listening"
+                  ? "bg-red-600 scale-110 ring-4 ring-red-400 ring-opacity-50"
+                  : appState === "thinking"
+                  ? "bg-gray-700 opacity-50 cursor-not-allowed"
+                  : (listenMode === "address" || listenMode === "solo") && autoListenActiveRef.current
+                  ? "bg-green-800 ring-2 ring-green-500 ring-opacity-60 hover:bg-green-700"
+                  : "bg-green-600 hover:bg-green-500 active:scale-95"
               }`}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -548,7 +766,7 @@ export default function ChatPage() {
             </button>
           )}
 
-          <button onClick={() => setVoiceMode(false)} className="text-xs text-gray-600 hover:text-gray-400">Switch to text</button>
+          <button onClick={() => { deactivateAutoListen(); setVoiceMode(false); }} className="text-xs text-gray-600 hover:text-gray-400">Switch to text</button>
         </div>
       ) : (
         /* Text Mode */
