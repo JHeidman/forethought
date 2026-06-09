@@ -215,6 +215,7 @@ Player profile:
 - Gender: ${profile.gender || "not yet known"}
 - Age group: ${profile.age_bracket || "not yet known"}
 - Season goal: ${profile.goal || "not yet set"}
+- GPS/scoring app: ${(profile as Record<string, string | null>).scoring_app || "not yet known"}
 - Notes about their game: ${profile.player_notes || "none yet"}
 - AI coaching notes (auto-generated from past sessions): ${(profile as Record<string, string | null>).ai_notes || "none yet — will build over time"}
 ${profile.frankie_prefs ? `\nPersonal preferences from this player: ${profile.frankie_prefs}` : ""}
@@ -233,6 +234,18 @@ The player is actively on the golf course right now. Adjust your entire style:
 - Lead with the answer, skip the preamble. "Take the 7-iron, aim at the left edge" not "Great question! Given the conditions and your distances, I'd suggest..."
 - Speak like a caddy standing next to them, not a coach in a lesson. Punchy, direct, confident.
 - They cannot read long text while playing. Everything you say will be spoken aloud.
+- You track shot distances via GPS automatically. When you get shot data (see SHOT TRACKING block), react to it naturally — confirm good shots, gently ask about mishits. Don't announce "I've logged your shot" — just act on the data.
+
+${(() => {
+  const app = (profile as Record<string, string | null>).scoring_app;
+  if (app && app !== "none") {
+    return `GPS & SCORING APP: The player uses ${app} for distances and scoring. Do NOT offer to keep score or tell them distances to pin — ${app} handles that. Your job is club selection, strategy, and coaching. When they tell you their yardage (which they got from ${app}), trust it and give your best advice.`;
+  } else if (!app) {
+    return `GPS & SCORING APP: You don't know yet whether the player uses a GPS or scoring app. Early in this round, ask naturally — something like: "Are you running USwing or another app today, or do you want me to track things?" One casual question. If they use an app, you can focus purely on the caddy stuff. If not, offer to keep score.`;
+  } else {
+    return `GPS & SCORING APP: The player doesn't use a GPS or scoring app. You can offer to keep score if the conversation calls for it, and rely on what they tell you for distances.`;
+  }
+})()}
 ` : ""}RANGE / PRACTICE MODE:
 If the player indicates they're at the range, on a practice green, or working on something specific (e.g. "I'm at the range", "heading to practice", "working on my driver today"), automatically shift into practice mode for that session:
 - Be more iterative and conversational. After giving advice, ask a follow-up: "How did that feel?" or "What happened on the last one?"
@@ -281,7 +294,7 @@ async function extractProfile(
   anthropic: Anthropic,
   conversationText: string,
   existing: Record<string, string | null>
-): Promise<{ name?: string; handicap?: string; home_course?: string; gender?: string; age_bracket?: string; goal?: string }> {
+): Promise<{ name?: string; handicap?: string; home_course?: string; gender?: string; age_bracket?: string; goal?: string; scoring_app?: string }> {
   try {
     const result = await anthropic.messages.create({
       model: getUtilityModel(),
@@ -293,7 +306,8 @@ async function extractProfile(
 - gender: "male", "female", or "other" — only if clearly stated
 - age_bracket: "under_30", "30s", "40s", "50s", or "60_plus" — only if age or age range is mentioned
 - goal: their season or improvement goal in their own words — e.g. "break 90 by end of summer", "get to a 15 handicap", "stop embarrassing myself at work scrambles". Only capture if clearly stated. Keep it short and in their voice.
-Return only valid JSON. Example: {"name": "Jeff", "handicap": "39", "home_course": "Genesee Valley", "gender": "male", "age_bracket": "50s", "goal": "break 80 this season"}`,
+- scoring_app: the name of any GPS or scoring app they use on the course — e.g. "USwing", "18Birdies", "Golfshot", "Golf Pad", "Arccos". Only if clearly mentioned. Use "none" if they explicitly say they don't use one.
+Return only valid JSON. Example: {"name": "Jeff", "handicap": "39", "home_course": "Genesee Valley", "gender": "male", "age_bracket": "50s", "goal": "break 80 this season", "scoring_app": "18Birdies"}`,
       messages: [{ role: "user", content: `Conversation:\n${conversationText}\n\nAlready known: ${JSON.stringify(existing)}` }],
     });
     const raw = result.content[0].type === "text" ? result.content[0].text.trim() : "{}";
@@ -709,7 +723,8 @@ export async function POST(req: NextRequest) {
       !isProfileComplete(profile as Record<string, string | null>) ||
       !profile.gender ||
       !profile.age_bracket ||
-      !profile.goal
+      !profile.goal ||
+      !profile.scoring_app
     );
 
     // Extract plan ingredients when we have a goal and plan isn't complete yet (skip on-course)
@@ -742,6 +757,7 @@ export async function POST(req: NextRequest) {
         gender: (extractedProfile as Record<string, string>).gender || profile.gender || null,
         age_bracket: (extractedProfile as Record<string, string>).age_bracket || profile.age_bracket || null,
         goal: (extractedProfile as Record<string, string>).goal || profile.goal || null,
+        scoring_app: (extractedProfile as Record<string, string>).scoring_app || profile.scoring_app || null,
       };
 
       const hasChanges = Object.keys(updated).some(k => updated[k] !== (profile as Record<string, string | null>)[k]);
@@ -754,6 +770,7 @@ export async function POST(req: NextRequest) {
           persona: profile.persona || "frankie",
           clubs_seeded: profile.clubs_seeded ?? false,
           goal: updated.goal,
+          scoring_app: updated.scoring_app,
           updated_at: new Date().toISOString(),
         });
         if (upsertError) console.error("Profile upsert error:", upsertError);
