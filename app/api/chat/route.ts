@@ -235,6 +235,8 @@ The player is actively on the golf course right now. Adjust your entire style:
 - Speak like a caddy standing next to them, not a coach in a lesson. Punchy, direct, confident.
 - They cannot read long text while playing. Everything you say will be spoken aloud.
 - You track shot distances via GPS automatically. When you get shot data (see SHOT TRACKING block), react to it naturally — confirm good shots, gently ask about mishits. Don't announce "I've logged your shot" — just act on the data.
+- Whenever the player describes a shot they just hit — direction, feel, result, anything — call note_shot silently alongside your reply. "Dead left", "caught it thin", "straight but short", "shanked it" — all worth capturing. You don't need to tell them you're doing it.
+- If the description also confirms a mishit (fat, thin, topped, shank, etc.), call BOTH note_shot AND mark_mishit.
 
 ${(() => {
   const app = (profile as Record<string, string | null>).scoring_app;
@@ -741,6 +743,19 @@ const markMishitTool: Anthropic.Tool = {
   },
 };
 
+const noteShotTool: Anthropic.Tool = {
+  name: "note_shot",
+  description: "Record the player's description of a shot they just hit — direction, feel, result, etc. Call this whenever the player describes a shot outcome, even briefly. Examples: 'dead left', 'straight but short', 'felt great, landed pin high', 'shanked it right'. Does NOT mark as a mishit or affect distance calculations — use mark_mishit for that.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      club_name: { type: "string", description: "The club that was hit" },
+      notes: { type: "string", description: "The player's description of the shot in their own words — direction, feel, result" },
+    },
+    required: ["club_name", "notes"],
+  },
+};
+
 // Fire-and-forget: save a completed shot to shot_history
 async function saveShotToHistory(
   userId: string,
@@ -1029,7 +1044,7 @@ export async function POST(req: NextRequest) {
       model: activeModel,
       max_tokens: 1024,
       system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-      tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool],
+      tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
       messages: apiMessages,
     });
 
@@ -1055,7 +1070,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 512,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool],
+          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1087,7 +1102,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 512,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool],
+          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1122,7 +1137,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool],
+          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1163,7 +1178,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool],
+          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1174,6 +1189,47 @@ export async function POST(req: NextRequest) {
                 content: latestShot
                   ? `Marked as mishit${input.description ? ` (${input.description})` : ""} — excluded from distance averages.`
                   : "No recent shot found for that club.",
+              }],
+            },
+          ],
+        });
+
+        reply = followUp.content.find((b) => b.type === "text")?.type === "text"
+          ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
+          : "";
+
+      } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "note_shot") {
+        const input = toolBlock.input as { club_name: string; notes: string };
+
+        // Find most recent shot for this club and append notes
+        const { data: latestShot } = await supabase
+          .from("shot_history")
+          .select("id, shot_notes")
+          .eq("user_id", user.id)
+          .ilike("club_name", input.club_name)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (latestShot) {
+          const existing = latestShot.shot_notes;
+          const updated = existing ? `${existing} | ${input.notes}` : input.notes;
+          await supabase.from("shot_history").update({ shot_notes: updated }).eq("id", latestShot.id);
+        }
+
+        const followUp = await anthropic.messages.create({
+          model: activeModel,
+          max_tokens: 256,
+          system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
+          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          messages: [
+            ...apiMessages,
+            { role: "assistant", content: response.content },
+            {
+              role: "user", content: [{
+                type: "tool_result",
+                tool_use_id: toolBlock.id,
+                content: latestShot ? "Shot noted." : "No recent shot found for that club.",
               }],
             },
           ],
