@@ -156,6 +156,34 @@ export default function ChatPage() {
       if (existingMessages.length > 0) {
         setMessages(existingMessages as Message[]);
         setShowSuggestions(true); // show chips for returning users too
+
+        // Check for unread announcements — if any exist, send a greeting so
+        // Frankie can naturally mention what's new in this session.
+        try {
+          const annRes = await fetch("/api/announcements");
+          if (annRes.ok) {
+            const annData = await annRes.json();
+            if (annData.announcements?.length > 0) {
+              setAppState("thinking");
+              const res = await fetch("/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: "hello", isGreeting: true }),
+              });
+              const data = await res.json();
+              if (data.reply) {
+                if (data.personaName) setPersonaName(data.personaName);
+                if (data.voiceId) currentVoiceIdRef.current = data.voiceId;
+                const msg = { id: crypto.randomUUID(), role: "assistant" as const, content: data.reply };
+                setMessages(prev => [...prev, msg]);
+                await speakText(data.speech || data.reply, data.voiceId);
+              }
+              setAppState("idle");
+            }
+          }
+        } catch {
+          // non-critical — silently ignore
+        }
       } else {
         setAppState("thinking");
         try {
