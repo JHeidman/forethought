@@ -1302,10 +1302,8 @@ export async function POST(req: NextRequest) {
     // Fire-and-forget: mark announcements as read now that Frankie has delivered them
     if (isGreeting && unreadAnnouncements.length > 0) {
       const ids = unreadAnnouncements.map((a: AnnouncementItem) => a.id);
-      supabase.from("user_announcement_reads")
-        .upsert(ids.map((id: string) => ({ user_id: user.id, announcement_id: id })), { onConflict: "user_id,announcement_id" })
-        .then(() => {}) // intentionally not awaited
-        .catch((err: unknown) => console.error("mark announcements read error:", err));
+      void supabase.from("user_announcement_reads")
+        .upsert(ids.map((id: string) => ({ user_id: user.id, announcement_id: id })), { onConflict: "user_id,announcement_id" });
     }
 
     return NextResponse.json({
