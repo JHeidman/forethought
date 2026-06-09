@@ -86,6 +86,12 @@ export default function ProfilePage() {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  type Announcement = { id: string; version: string; title: string; summary: string; detail: string; created_at: string };
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [newsOpen, setNewsOpen] = useState(false);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [expandedAnn, setExpandedAnn] = useState<string | null>(null);
+
   useEffect(() => {
     async function load() {
       const supabase = createClient();
@@ -114,6 +120,26 @@ export default function ProfilePage() {
     }
     load();
   }, []);
+
+  async function loadAnnouncements() {
+    if (announcements.length > 0) return; // already loaded
+    setNewsLoading(true);
+    try {
+      const res = await fetch("/api/announcements?all=true");
+      if (res.ok) {
+        const data = await res.json();
+        setAnnouncements(data.announcements ?? []);
+      }
+    } finally {
+      setNewsLoading(false);
+    }
+  }
+
+  function toggleNews() {
+    const next = !newsOpen;
+    setNewsOpen(next);
+    if (next) loadAnnouncements();
+  }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -603,6 +629,53 @@ export default function ProfilePage() {
           ) : (
             <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
               <p className="text-sm text-gray-600 italic">Nothing captured yet. After a few conversations, your caddy will start noting what they&apos;ve learned about your game here.</p>
+            </div>
+          )}
+        </div>
+
+        {/* What's New accordion */}
+        <div className="border-t border-gray-800 pt-6">
+          <button
+            onClick={toggleNews}
+            className="flex items-center justify-between w-full text-left group"
+          >
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide">What&apos;s New</p>
+              <p className="text-xs text-gray-600 mt-0.5">Recent updates to ForeThought</p>
+            </div>
+            <span className={`text-gray-500 text-lg transition-transform ${newsOpen ? "rotate-90" : ""}`}>›</span>
+          </button>
+
+          {newsOpen && (
+            <div className="mt-4 space-y-3">
+              {newsLoading && (
+                <p className="text-sm text-gray-600 text-center py-4">Loading…</p>
+              )}
+              {!newsLoading && announcements.length === 0 && (
+                <p className="text-sm text-gray-600 italic">No announcements yet.</p>
+              )}
+              {announcements.map(a => (
+                <div key={a.id} className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+                  <button
+                    onClick={() => setExpandedAnn(expandedAnn === a.id ? null : a.id)}
+                    className="w-full text-left px-4 py-3 flex items-start justify-between gap-2"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className="text-xs text-gray-500 font-mono">{a.version}</span>
+                      </div>
+                      <p className="text-sm font-medium text-white">{a.title}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{a.summary}</p>
+                    </div>
+                    <span className={`text-gray-500 shrink-0 mt-1 transition-transform ${expandedAnn === a.id ? "rotate-90" : ""}`}>›</span>
+                  </button>
+                  {expandedAnn === a.id && (
+                    <div className="px-4 pb-4 border-t border-gray-700">
+                      <p className="text-sm text-gray-300 leading-relaxed mt-3">{a.detail}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>

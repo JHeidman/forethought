@@ -29,7 +29,7 @@ type UserStat = {
 
 export default function AdminPage() {
   const router = useRouter();
-  const [tab, setTab] = useState<"users" | "prompt" | "codes">("users");
+  const [tab, setTab] = useState<"users" | "prompt" | "codes" | "news">("users");
   const [unauthorized, setUnauthorized] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -48,6 +48,13 @@ export default function AdminPage() {
   const [codes, setCodes] = useState<InviteCode[]>([]);
   const [newCode, setNewCode] = useState("");
   const [newExpiry, setNewExpiry] = useState("");
+
+  // News tab
+  type Announcement = { id: string; version: string; title: string; summary: string; detail: string; is_active: boolean; created_at: string };
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [newAnn, setNewAnn] = useState({ version: "", title: "", summary: "", detail: "" });
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [newsSaving, setNewsSaving] = useState(false);
   const [codesSaving, setCodesSaving] = useState(false);
   const [codesSaved, setCodesSaved] = useState(false);
 
@@ -70,6 +77,7 @@ export default function AdminPage() {
 
       setLoading(false);
       loadUsers();
+      loadAnnouncements();
     }
     init();
   }, []);
@@ -117,6 +125,47 @@ export default function AdminPage() {
     setCodes(codes.filter(c => c.code !== code));
   }
 
+  async function loadAnnouncements() {
+    setNewsLoading(true);
+    const supabase = createClient();
+    // Use service-role bypass by selecting without RLS filter via admin path
+    const { data } = await supabase.from("announcements").select("*").order("created_at", { ascending: false });
+    setAnnouncements(data ?? []);
+    setNewsLoading(false);
+  }
+
+  async function toggleAnnouncement(id: string, currentActive: boolean) {
+    const supabase = createClient();
+    await supabase.from("announcements").update({ is_active: !currentActive }).eq("id", id);
+    setAnnouncements(prev => prev.map(a => a.id === id ? { ...a, is_active: !currentActive } : a));
+  }
+
+  async function deleteAnnouncement(id: string) {
+    if (!confirm("Delete this announcement? This cannot be undone.")) return;
+    const supabase = createClient();
+    await supabase.from("announcements").delete().eq("id", id);
+    setAnnouncements(prev => prev.filter(a => a.id !== id));
+  }
+
+  async function addAnnouncement(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newAnn.version.trim() || !newAnn.title.trim() || !newAnn.summary.trim() || !newAnn.detail.trim()) return;
+    setNewsSaving(true);
+    const supabase = createClient();
+    const { data, error } = await supabase.from("announcements").insert({
+      version: newAnn.version.trim(),
+      title: newAnn.title.trim(),
+      summary: newAnn.summary.trim(),
+      detail: newAnn.detail.trim(),
+      is_active: true,
+    }).select().single();
+    if (!error && data) {
+      setAnnouncements(prev => [data, ...prev]);
+      setNewAnn({ version: "", title: "", summary: "", detail: "" });
+    }
+    setNewsSaving(false);
+  }
+
   function isExpired(expiresAt?: string | null) {
     if (!expiresAt) return false;
     return new Date(expiresAt) < new Date();
@@ -143,7 +192,7 @@ export default function AdminPage() {
 
       {/* Tabs */}
       <div className="flex border-b border-gray-800 shrink-0">
-        {([["users", "👥 Users"], ["prompt", "✏️ Prompt"], ["codes", "🔑 Codes"]] as [typeof tab, string][]).map(([key, label]) => (
+        {([["users", "👥 Users"], ["prompt", "✏️ Prompt"], ["codes", "🔑 Codes"], ["news", "📢 News"]] as [typeof tab, string][]).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)}
             className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${tab === key ? "border-green-500 text-green-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>
             {label}
@@ -293,6 +342,100 @@ export default function AdminPage() {
               className="w-full rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 px-4 py-3 text-white font-semibold transition-colors">
               {codesSaved ? "Saved ✓" : codesSaving ? "Saving…" : "Save Codes"}
             </button>
+          </div>
+        )}
+
+        {/* News Tab */}
+        {tab === "news" && (
+          <div className="p-4 space-y-6">
+
+            {/* Existing announcements */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold text-gray-300">Announcements</h2>
+                <button onClick={loadAnnouncements} disabled={newsLoading} className="text-xs text-gray-500 hover:text-gray-300">
+                  {newsLoading ? "Loading…" : "↻ Refresh"}
+                </button>
+              </div>
+
+              {announcements.length === 0 && !newsLoading && (
+                <p className="text-gray-600 text-sm">No announcements yet.</p>
+              )}
+
+              <div className="space-y-3">
+                {announcements.map(a => (
+                  <div key={a.id} className={`bg-gray-800 rounded-xl p-4 border ${a.is_active ? "border-gray-700" : "border-gray-800 opacity-50"}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-xs text-gray-500 font-mono">{a.version}</span>
+                          {a.is_active
+                            ? <span className="text-xs bg-green-900 text-green-400 px-1.5 py-0.5 rounded">live</span>
+                            : <span className="text-xs bg-gray-700 text-gray-500 px-1.5 py-0.5 rounded">hidden</span>}
+                        </div>
+                        <p className="font-medium text-white text-sm">{a.title}</p>
+                        <p className="text-xs text-gray-400 mt-1 line-clamp-2">{a.summary}</p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        <button
+                          onClick={() => toggleAnnouncement(a.id, a.is_active)}
+                          className="text-xs text-blue-400 hover:text-blue-300"
+                        >
+                          {a.is_active ? "Hide" : "Show"}
+                        </button>
+                        <button
+                          onClick={() => deleteAnnouncement(a.id)}
+                          className="text-xs text-red-400 hover:text-red-300"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-2">{formatDate(a.created_at)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Add new announcement */}
+            <form onSubmit={addAnnouncement} className="space-y-3 border-t border-gray-800 pt-4">
+              <h2 className="text-sm font-semibold text-gray-300">New Announcement</h2>
+              <p className="text-xs text-gray-600">Users who haven&apos;t seen this will hear about it from Frankie on their next session.</p>
+
+              <input
+                value={newAnn.version}
+                onChange={e => setNewAnn(v => ({ ...v, version: e.target.value }))}
+                placeholder="Version / date — e.g. '1.3 · Jun 2025'"
+                className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-2.5 text-white text-sm focus:outline-none focus:border-green-500"
+              />
+              <input
+                value={newAnn.title}
+                onChange={e => setNewAnn(v => ({ ...v, title: e.target.value }))}
+                placeholder="Feature title — e.g. 'GPS Shot Tracking'"
+                className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-2.5 text-white text-sm focus:outline-none focus:border-green-500"
+              />
+              <textarea
+                value={newAnn.summary}
+                onChange={e => setNewAnn(v => ({ ...v, summary: e.target.value }))}
+                placeholder="Short summary (1-2 sentences) — what Frankie tells the player"
+                rows={2}
+                className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-2.5 text-white text-sm resize-none focus:outline-none focus:border-green-500"
+              />
+              <textarea
+                value={newAnn.detail}
+                onChange={e => setNewAnn(v => ({ ...v, detail: e.target.value }))}
+                placeholder="Full detail — shown when the player asks for more info"
+                rows={4}
+                className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-2.5 text-white text-sm resize-none focus:outline-none focus:border-green-500"
+              />
+              <button
+                type="submit"
+                disabled={newsSaving}
+                className="w-full rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 px-4 py-3 text-white font-semibold transition-colors"
+              >
+                {newsSaving ? "Adding…" : "Add Announcement"}
+              </button>
+            </form>
           </div>
         )}
 
