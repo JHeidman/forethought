@@ -17,6 +17,7 @@ type AppState = "idle" | "listening" | "thinking" | "speaking";
 type ListenMode = "address" | "solo" | "interact" | "interact-vad";
 
 export default function ChatPage() {
+  if (typeof window !== "undefined") console.log("[ChatPage] client render");
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -112,9 +113,12 @@ export default function ChatPage() {
   }
 
   useEffect(() => {
+    console.log("[effect] useEffect fired");
     async function init() {
+      console.log("[init] START");
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
+      console.log("[init] user:", user?.id ?? "null");
       if (!user) { router.push("/login"); return; }
 
       const [messagesResult, profileResult] = await Promise.all([
@@ -143,12 +147,14 @@ export default function ChatPage() {
       const chips = buildChips(goal);
       setSuggestionChips(chips);
 
+      console.log("[init] existingMessages.length:", existingMessages.length);
       if (existingMessages.length > 0) {
         setMessages(existingMessages as Message[]);
         setShowSuggestions(true); // show chips for returning users too
 
         // Check for unread announcements — if any exist, send a greeting so
         // Frankie can naturally mention what's new in this session.
+        console.log("[ann] about to fetch announcements...");
         try {
           const annRes = await fetch("/api/announcements");
           const annData = annRes.ok ? await annRes.json() : {};
