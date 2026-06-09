@@ -628,6 +628,119 @@ function buildShotTrackingBlock(
   return lines.join("\n");
 }
 
+// ── Distance learning helpers ────────────────────────────────────────────────
+
+type DistanceProposal = {
+  club_name: string;
+  currentDistance: number;
+  proposedDistance: number;
+  shotCount: number;
+  percentDiff: number;
+};
+
+function calculateDistanceProposals(
+  clubs: Array<{ club_name: string; expected_distance: number }>,
+  shotHistory: Array<{ club_name: string; distance_yards: number }>
+): DistanceProposal[] {
+  // Group shots by club
+  const byClub: Record<string, number[]> = {};
+  for (const shot of shotHistory) {
+    if (!byClub[shot.club_name]) byClub[shot.club_name] = [];
+    byClub[shot.club_name].push(shot.distance_yards);
+  }
+
+  const proposals: DistanceProposal[] = [];
+
+  for (const club of clubs) {
+    const shots = byClub[club.club_name.toLowerCase()] ??
+                  byClub[club.club_name] ?? [];
+    if (shots.length < 5) continue; // need at least 5 shots for signal
+
+    // Trimmed median: sort, drop top/bottom 15%
+    const sorted = [...shots].sort((a, b) => a - b);
+    const trimCount = Math.floor(sorted.length * 0.15);
+    const trimmed = sorted.slice(trimCount, sorted.length - trimCount);
+    const proposed = Math.round(trimmed.reduce((a, b) => a + b, 0) / trimmed.length);
+
+    const percentDiff = Math.round(((proposed - club.expected_distance) / club.expected_distance) * 100);
+    if (Math.abs(percentDiff) < 8) continue; // not significant enough to mention
+
+    proposals.push({
+      club_name: club.club_name,
+      currentDistance: club.expected_distance,
+      proposedDistance: proposed,
+      shotCount: shots.length,
+      percentDiff,
+    });
+  }
+
+  return proposals;
+}
+
+function buildDistanceLearningBlock(proposals: DistanceProposal[]): string {
+  if (proposals.length === 0) return "";
+
+  const lines = ["DISTANCE LEARNING — GPS DATA SUGGESTS UPDATES NEEDED:"];
+  lines.push("Based on GPS-measured shots, these clubs show a consistent difference from what's on file:");
+
+  for (const p of proposals) {
+    const dir = p.percentDiff > 0 ? "longer" : "shorter";
+    lines.push(`- ${p.club_name}: on file ${p.currentDistance} yds → GPS average ${p.proposedDistance} yds (${Math.abs(p.percentDiff)}% ${dir}, from ${p.shotCount} shots)`);
+  }
+
+  lines.push(`
+At a natural moment in this conversation — ideally when one of these clubs comes up, or at the end of a round — bring this up. Be specific about what you've observed. Explain that it could be affecting your recommendations. Ask if they want you to update the numbers. Something like:
+
+"I've been watching your [club] and you're consistently getting [X yards], not the [Y yards] I had on file. That might be why I've been sending you one club short. Want me to update that?"
+
+Or for multiple clubs: name them together — "your 7-iron and 8-iron are both running longer than I had..."
+
+If they say yes → call update_club_distances with ONLY the clubs they confirmed.
+If they say no or not now → acknowledge it and move on. Don't push.
+
+IMPORTANT: Never call update_club_distances without explicit player confirmation. Never bring this up mid-shot or in the middle of answering something else. Wait for a natural opening.`);
+
+  return lines.join("\n");
+}
+
+// ── Distance learning tools ───────────────────────────────────────────────────
+
+const updateClubDistancesTool: Anthropic.Tool = {
+  name: "update_club_distances",
+  description: "Update expected distances for one or more clubs based on GPS-measured shot data. Only call this AFTER the player has explicitly confirmed they want the update. Never call proactively.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      updates: {
+        type: "array",
+        description: "Clubs to update",
+        items: {
+          type: "object",
+          properties: {
+            club_name: { type: "string", description: "Exact club name as it appears in their bag" },
+            new_distance: { type: "number", description: "New expected distance in yards" },
+          },
+          required: ["club_name", "new_distance"],
+        },
+      },
+    },
+    required: ["updates"],
+  },
+};
+
+const markMishitTool: Anthropic.Tool = {
+  name: "mark_mishit",
+  description: "Mark the player's most recent shot with a specific club as a mishit, excluding it from distance calculations. Call this when the player confirms a shot was mishit.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      club_name: { type: "string", description: "The club that was mishit" },
+      description: { type: "string", description: "How it was mishit — e.g. 'fat', 'thin', 'topped', 'heel'" },
+    },
+    required: ["club_name"],
+  },
+};
+
 // Fire-and-forget: save a completed shot to shot_history
 async function saveShotToHistory(
   userId: string,
@@ -682,12 +795,16 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     // Fetch profile, history, settings, message count, clubs, and plan data in parallel
-    const [profileResult, historyResult, settingsResult, countResult, clubsResult] = await Promise.all([
+    // Shot history only fetched on-course — needed for distance learning proposals
+    const [profileResult, historyResult, settingsResult, countResult, clubsResult, shotHistoryResult] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("messages").select("role, content, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20),
       supabase.from("settings").select("value").eq("key", "base_prompt").single(),
       supabase.from("messages").select("id", { count: "exact", head: true }).eq("user_id", user.id),
       supabase.from("clubs").select("club_name, expected_distance, carry_distance, distance_source, brand, club_model, loft, lie_angle, shaft_flex, shaft_material, confidence, typical_shape, notes").eq("user_id", user.id).order("sort_order"),
+      roundContext
+        ? supabase.from("shot_history").select("club_name, distance_yards").eq("user_id", user.id).eq("is_mishit", false).gt("distance_yards", 10)
+        : Promise.resolve({ data: [] as Array<{ club_name: string; distance_yards: number }> }),
     ]);
 
     let profile = profileResult.data ?? {};
@@ -698,6 +815,10 @@ export async function POST(req: NextRequest) {
     const basePrompt = settingsResult.data?.value ?? "You are a knowledgeable golf caddy and instructor. Be concise and actionable.";
     const persona = getPersona(profile.persona);
     let clubs = clubsResult.data ?? [];
+    const shotHistory = (shotHistoryResult as { data: Array<{ club_name: string; distance_yards: number }> | null }).data ?? [];
+    const distanceProposals = roundContext && clubs.length > 0
+      ? calculateDistanceProposals(clubs as Array<{ club_name: string; expected_distance: number }>, shotHistory)
+      : [];
     let planIngredients: PlanIngredients = (profile.plan_ingredients as PlanIngredients) ?? {};
     const seasonPlan: string | null = profile.season_plan ?? null;
 
@@ -858,10 +979,17 @@ export async function POST(req: NextRequest) {
         })
       : buildOnboardingPrompt(profile, isGreeting || history.length === 0);
 
-    // Append shot tracking block when player announces a club on-course
-    const finalSystemPrompt = (shotContext?.announcedClub && systemPromptText)
-      ? `${systemPromptText}\n\n${buildShotTrackingBlock(shotContext as ShotContext, clubs)}`
-      : systemPromptText;
+    // Append on-course context blocks to system prompt
+    const distanceLearningBlock = buildDistanceLearningBlock(distanceProposals);
+    const shotTrackingBlock = shotContext?.announcedClub
+      ? buildShotTrackingBlock(shotContext as ShotContext, clubs as Array<{ club_name: string; expected_distance: number }>)
+      : "";
+
+    const finalSystemPrompt = [
+      systemPromptText,
+      distanceLearningBlock,
+      shotTrackingBlock,
+    ].filter(Boolean).join("\n\n");
 
     // Detect video/media URLs
     const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
@@ -901,7 +1029,7 @@ export async function POST(req: NextRequest) {
       model: activeModel,
       max_tokens: 1024,
       system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-      tools: [savePlanTool, saveSeasonPlanTool],
+      tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool],
       messages: apiMessages,
     });
 
@@ -927,7 +1055,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 512,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool],
+          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -959,7 +1087,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 512,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool],
+          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -968,6 +1096,84 @@ export async function POST(req: NextRequest) {
                 type: "tool_result",
                 tool_use_id: toolBlock.id,
                 content: "Season plan saved successfully.",
+              }],
+            },
+          ],
+        });
+
+        reply = followUp.content.find((b) => b.type === "text")?.type === "text"
+          ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
+          : "";
+
+      } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "update_club_distances") {
+        const input = toolBlock.input as { updates: Array<{ club_name: string; new_distance: number }> };
+
+        // Update each club's expected_distance
+        await Promise.all(
+          input.updates.map(({ club_name, new_distance }) =>
+            supabase.from("clubs")
+              .update({ expected_distance: new_distance, distance_source: "gps_measured" })
+              .eq("user_id", user.id)
+              .ilike("club_name", club_name)
+          )
+        );
+
+        const followUp = await anthropic.messages.create({
+          model: activeModel,
+          max_tokens: 256,
+          system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
+          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool],
+          messages: [
+            ...apiMessages,
+            { role: "assistant", content: response.content },
+            {
+              role: "user", content: [{
+                type: "tool_result",
+                tool_use_id: toolBlock.id,
+                content: `Updated: ${input.updates.map(u => `${u.club_name} → ${u.new_distance} yds`).join(", ")}`,
+              }],
+            },
+          ],
+        });
+
+        reply = followUp.content.find((b) => b.type === "text")?.type === "text"
+          ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
+          : "";
+
+      } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "mark_mishit") {
+        const input = toolBlock.input as { club_name: string; description?: string };
+
+        // Mark the most recent shot for this club as a mishit
+        const { data: latestShot } = await supabase
+          .from("shot_history")
+          .select("id")
+          .eq("user_id", user.id)
+          .ilike("club_name", input.club_name)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (latestShot) {
+          await supabase.from("shot_history")
+            .update({ is_mishit: true, mishit_description: input.description ?? null })
+            .eq("id", latestShot.id);
+        }
+
+        const followUp = await anthropic.messages.create({
+          model: activeModel,
+          max_tokens: 256,
+          system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
+          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool],
+          messages: [
+            ...apiMessages,
+            { role: "assistant", content: response.content },
+            {
+              role: "user", content: [{
+                type: "tool_result",
+                tool_use_id: toolBlock.id,
+                content: latestShot
+                  ? `Marked as mishit${input.description ? ` (${input.description})` : ""} — excluded from distance averages.`
+                  : "No recent shot found for that club.",
               }],
             },
           ],
