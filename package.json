@@ -7,9 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:api": "node tests/api.test.js",
+    "test:unit": "vitest run tests/unit",
+    "test:unit:watch": "vitest tests/unit",
     "test:browser": "playwright test tests/smoke.spec.ts",
-    "test": "powershell -File scripts/test.ps1"
+    "test": "vitest run tests/unit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
@@ -32,6 +33,7 @@
     "playwright": "^1.60.0",
     "qrcode": "^1.5.4",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.8"
   }
 }

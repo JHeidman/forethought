@@ -11,7 +11,7 @@
  */
 
 // Intent words that signal the player is announcing a shot (not discussing past shots)
-const HIT_INTENT_RE = /\b(going to|gonna|about to|will hit|will use|hitting|taking|using|pull(?:ing)?|tee(?:ing)?(?:\s+off)?(?:\s+with)?|hit\b|club(?:\s+up)?)\b/i;
+const HIT_INTENT_RE = /\b(going to|gonna|about to|will hit|will use|hitting|taking|using|use|pull(?:ing)?|tee(?:ing)?(?:\s+off)?(?:\s+with)?|club(?:\s+up)?|putt(?:ing)?)\b/i;
 
 type ClubEntry = {
   pattern: RegExp;
