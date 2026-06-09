@@ -23,18 +23,8 @@ export default function ChatPage() {
   const [appState, setAppState] = useState<AppState>("idle");
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
-  const [listenMode, setListenMode] = useState<ListenMode>(() => {
-    if (typeof window !== "undefined") {
-      return (localStorage.getItem("frankieListenMode") as ListenMode) ?? "address";
-    }
-    return "address";
-  });
-  const [muted, setMuted] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("frankieMuted") === "true";
-    }
-    return false;
-  });
+  const [listenMode, setListenMode] = useState<ListenMode>("address");
+  const [muted, setMuted] = useState(false);
   const [personaName, setPersonaName] = useState("Frankie");
   const [planSavedToast, setPlanSavedToast] = useState(false);
   const [seasonPlanSavedToast, setSeasonPlanSavedToast] = useState(false);
@@ -251,7 +241,12 @@ export default function ChatPage() {
   useEffect(() => { listenModeRef.current = listenMode; }, [listenMode]);
   useEffect(() => { personaNameRef.current = personaName; }, [personaName]);
 
-  // Persist listen mode
+  // Restore + persist listen mode and mute state from localStorage (after hydration)
+  useEffect(() => {
+    const storedMode = localStorage.getItem("frankieListenMode") as ListenMode | null;
+    if (storedMode) setListenMode(storedMode);
+    if (localStorage.getItem("frankieMuted") === "true") setMuted(true);
+  }, []);
   useEffect(() => { localStorage.setItem("frankieListenMode", listenMode); }, [listenMode]);
 
   // Wake lock — keep screen on during auto-listen modes
