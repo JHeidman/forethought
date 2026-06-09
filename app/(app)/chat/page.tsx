@@ -161,8 +161,9 @@ export default function ChatPage() {
         // Frankie can naturally mention what's new in this session.
         try {
           const annRes = await fetch("/api/announcements");
+          const annData = annRes.ok ? await annRes.json() : {};
+          console.log("[ann check] status:", annRes.status, "data:", annData);
           if (annRes.ok) {
-            const annData = await annRes.json();
             if (annData.announcements?.length > 0) {
               setAppState("thinking");
               const res = await fetch("/api/chat", {

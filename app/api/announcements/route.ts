@@ -48,7 +48,11 @@ export async function GET(req: NextRequest) {
       .eq("is_active", true)
       .order("created_at", { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error("[announcements] fetch error:", error);
+      throw error;
+    }
+    console.log(`[announcements] found ${announcements?.length ?? 0} active announcements for user ${user.id}`);
     if (!announcements?.length) return NextResponse.json({ announcements: [] });
 
     if (all) {
@@ -56,10 +60,13 @@ export async function GET(req: NextRequest) {
     }
 
     // Fetch which ones this user has already read
-    const { data: reads } = await supabase
+    const { data: reads, error: readsError } = await supabase
       .from("user_announcement_reads")
       .select("announcement_id")
       .eq("user_id", user.id);
+
+    if (readsError) console.error("[announcements] reads error:", readsError);
+    console.log(`[announcements] user has read ${reads?.length ?? 0} announcements`);
 
     const readIds = new Set((reads ?? []).map((r: { announcement_id: string }) => r.announcement_id));
     const unread = announcements.filter((a: Announcement) => !readIds.has(a.id));
