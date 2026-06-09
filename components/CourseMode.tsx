@@ -14,6 +14,7 @@ type RoundContext = {
   courseName: string;
   tee: string;
   conditions: string;
+  scorecardContext?: string; // pre-fetched on round start, passed through on every message
 };
 
 type Props = {
@@ -40,13 +41,27 @@ export default function CourseMode({ onStart, onEnd, activeRound }: Props) {
     setSearching(false);
   }
 
-  function startRound() {
+  async function startRound() {
     if (!selected) return;
+    setSearching(true);
+    // Pre-fetch scorecard so we don't hit golfcourseapi.com on every message
+    let scorecardContext: string | undefined;
+    try {
+      const res = await fetch(`/api/course/detail?courseId=${selected.id}&tee=${encodeURIComponent(tee)}`);
+      if (res.ok) {
+        const data = await res.json();
+        scorecardContext = data.scorecardContext ?? undefined;
+      }
+    } catch {
+      // Non-fatal — route will fall back to fetching it itself
+    }
+    setSearching(false);
     onStart({
       courseId: selected.id,
       courseName: `${selected.club_name} — ${selected.course_name}`,
       tee,
       conditions,
+      scorecardContext,
     });
     setOpen(false);
   }

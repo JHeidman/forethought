@@ -619,16 +619,17 @@ export async function POST(req: NextRequest) {
 
     const isReturningUser = isGreeting && messageCount > 0 && isProfileComplete(profile as Record<string, string | null>);
 
-    // Only extract profile if something might have changed (skip during greetings)
-    const needsExtraction = !isGreeting && (
+    // Only extract profile if something might have changed (skip during greetings and on-course)
+    // On-course: player is mid-round, no need to update profile between shots
+    const needsExtraction = !isGreeting && !roundContext && (
       !isProfileComplete(profile as Record<string, string | null>) ||
       !profile.gender ||
       !profile.age_bracket ||
       !profile.goal
     );
 
-    // Extract plan ingredients when we have a goal and plan isn't complete yet
-    const needsIngredients = !isGreeting && !!profile.goal && !hasEnoughForPlan(profile.goal ?? null, planIngredients);
+    // Extract plan ingredients when we have a goal and plan isn't complete yet (skip on-course)
+    const needsIngredients = !isGreeting && !roundContext && !!profile.goal && !hasEnoughForPlan(profile.goal ?? null, planIngredients);
 
     const [extractedProfile, recentTopics, updatedIngredients] = await Promise.all([
       needsExtraction
@@ -711,17 +712,25 @@ export async function POST(req: NextRequest) {
       await supabase.from("profiles").update({ plan_ingredients: planIngredients }).eq("id", user.id);
     }
 
-    // Load scorecard if player is on the course
+    // Load scorecard if player is on the course.
+    // Use pre-fetched scorecardContext from the client when available (cached on round start)
+    // to avoid hitting golfcourseapi.com on every message.
     let scorecardContext = "";
     if (roundContext?.courseId) {
-      try {
-        const course = await getCourseDetail(roundContext.courseId);
-        if (course) {
-          const gender = (profile.gender === "female" ? "female" : "male") as "male" | "female";
-          scorecardContext = formatScorecardForPrompt(course, roundContext.tee ?? "White", gender);
+      if (roundContext.scorecardContext) {
+        // Fast path: client already has it
+        scorecardContext = roundContext.scorecardContext;
+      } else {
+        // Fallback: fetch it (e.g. page reload mid-round)
+        try {
+          const course = await getCourseDetail(roundContext.courseId);
+          if (course) {
+            const gender = (profile.gender === "female" ? "female" : "male") as "male" | "female";
+            scorecardContext = formatScorecardForPrompt(course, roundContext.tee ?? "White", gender);
+          }
+        } catch (err) {
+          console.error("Scorecard load error:", err);
         }
-      } catch (err) {
-        console.error("Scorecard load error:", err);
       }
     }
 
