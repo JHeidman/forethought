@@ -1022,8 +1022,16 @@ export async function POST(req: NextRequest) {
       ? buildAnnouncementsBlock(unreadAnnouncements, profile.name?.split(" ")[0] ?? "there")
       : "";
 
+    const capabilitiesBlock = `YOUR APP CAPABILITIES (answer questions about these confidently — they are YOUR features):
+- Voice mode: tap the mic button to talk. Four modes at the top of the voice screen: Named (say "Frankie" first — good for group play), Solo (always listening — best alone), Hold (tap to start, tap to send), Auto (tap once, sends when you go quiet). Mode is saved between sessions.
+- GPS shot tracking: when playing a round, say the club you're using before you hit ("hitting my 7-iron") and I'll measure the distance automatically with GPS. After several rounds I'll build real averages and suggest yardage updates. Say "I shanked that" to exclude a shot.
+- Season planning: tell me a goal ("break 90 by August") and I'll build you a personalised season roadmap. Ask anytime or wait for me to offer when I've gathered enough. Saved plans are on the Plans page.
+- Club bag: your full bag is on the Profile page with distances, shaft flex, loft, and shot shape. Edit any club to give me better data for recommendations.
+- Long-term memory: I take notes on your game automatically and remember them across sessions. You can see what I've learned on your Profile page.`;
+
     const finalSystemPrompt = [
       systemPromptText,
+      capabilitiesBlock,
       announcementsBlock,
       distanceLearningBlock,
       shotTrackingBlock,
