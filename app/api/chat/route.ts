@@ -1300,6 +1300,7 @@ export async function POST(req: NextRequest) {
     // high-signal messages (breakthroughs, explicit "remember" requests, scores).
     const newMessageCount = messageCount + 2; // user + assistant just added
     const isHighSignal = /\b(remember|breakthrough|figured out|finally|clicking|nailed it|shot \d+|broke \d+|best round|worst round|discovered|realized)\b/i.test(message ?? "");
+    console.log(`[ai_notes trigger] isGreeting=${isGreeting} newMessageCount=${newMessageCount} isHighSignal=${isHighSignal} msg="${(message ?? "").slice(0, 60)}"`);
     if (!isGreeting && (newMessageCount % 4 === 0 || isHighSignal)) {
       updateAiNotes(
         user.id,
