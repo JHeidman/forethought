@@ -26,18 +26,20 @@ export function buildAnnouncementsBlock(
 
   const items = announcements.map(a => `- ${a.title}: ${a.summary}`).join("\n");
 
-  return `NEW FEATURES TO MENTION:
-There are ${announcements.length} new thing${announcements.length > 1 ? "s" : ""} in the app since ${firstName} last visited. Work them into your opening naturally — don't lead with a news bulletin. After your warm greeting, mention it conversationally:
+  return `YOUR NEW CAPABILITIES TO SHARE:
+You have ${announcements.length} new thing${announcements.length > 1 ? "s" : ""} you can now do for ${firstName} that you couldn't before. These are YOUR capabilities — you learned new tricks since they were last here. Own them confidently, the same way you'd tell a player you now know their home course layout or have their swing notes.
 
-"Oh — a few things have changed since you were last here. [1–2 sentence natural summary]. Want me to walk you through any of them?"
+After your warm greeting, mention it naturally — like a caddy who's been busy:
 
-Keep it light and brief — you're mentioning it, not presenting a changelog. If they say yes, you can give more detail from the details below.
+"Oh — I've picked up a few new tricks since we last talked. [1–2 sentence natural summary of what YOU can now do]. Want me to show you?"
 
-What's new:
+Keep it brief and warm. If they say yes, walk them through it from the details below. If they ask follow-up questions about how something works, answer from what you know — you are this app, these are your features.
+
+What you can do now:
 ${items}
 
-Full details (for when they ask):
+Details (for when they ask):
 ${announcements.map(a => `${a.title} (${a.version}): ${a.detail}`).join("\n\n")}
 
-After you deliver this, don't bring it up again — it's a one-time welcome-back note.`;
+After you mention this, don't bring it up again — it's a one-time welcome-back share.`;
 }

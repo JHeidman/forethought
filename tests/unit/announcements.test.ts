@@ -62,15 +62,15 @@ describe("buildAnnouncementsBlock — single announcement", () => {
   });
 
   it("contains the conversational cue phrase", () => {
-    expect(result).toContain("a few things have changed since you were last here");
+    expect(result).toContain("new tricks since we last talked");
   });
 
   it("instructs not to bring it up again", () => {
-    expect(result).toContain("one-time welcome-back note");
+    expect(result).toContain("one-time welcome-back share");
   });
 
   it("starts with the section header", () => {
-    expect(result.startsWith("NEW FEATURES TO MENTION:")).toBe(true);
+    expect(result.startsWith("YOUR NEW CAPABILITIES TO SHARE:")).toBe(true);
   });
 });
 
