@@ -354,7 +354,6 @@ async function updateAiNotes(
 ): Promise<void> {
   try {
     const serviceKey = getEnvVar("SUPABASE_SERVICE_ROLE_KEY");
-    console.log("[updateAiNotes] start — userId:", userId, "hasServiceKey:", !!serviceKey);
 
     const { createClient } = await import("@supabase/supabase-js");
     const adminClient = createClient(supabaseUrl, serviceKey, {
@@ -370,9 +369,7 @@ async function updateAiNotes(
       .limit(30);
 
     if (msgErr) { console.error("[updateAiNotes] messages fetch error:", msgErr); return; }
-    if (!messages || messages.length < 5) { console.log("[updateAiNotes] not enough messages:", messages?.length); return; }
-
-    console.log("[updateAiNotes] summarizing", messages.length, "messages");
+    if (!messages || messages.length < 5) return;
 
     const conversation = messages.reverse()
       .map((m: { role: string; content: string }) => `${m.role === "user" ? "Player" : "Caddy"}: ${m.content}`)
@@ -399,7 +396,6 @@ ${existingAiNotes || "None yet."}`,
     });
 
     const extracted = result.content[0].type === "text" ? result.content[0].text.trim() : "";
-    console.log("[updateAiNotes] extracted:", extracted.slice(0, 100));
     if (!extracted || extracted === "NOTHING_NEW") return;
 
     const updatedNotes = existingAiNotes
@@ -412,7 +408,6 @@ ${existingAiNotes || "None yet."}`,
       .eq("id", userId);
 
     if (updateErr) console.error("[updateAiNotes] update error:", updateErr);
-    else console.log("[updateAiNotes] saved notes successfully");
 
   } catch (err) {
     console.error("[updateAiNotes] caught error:", err);
