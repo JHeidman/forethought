@@ -1,135 +1,145 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { getMainModel, getUtilityModel, getActiveTier } from "../../lib/model-router";
+import { getModel, getMainModel, getUtilityModel } from "../../lib/model-router";
 
-// Helpers to set / clear MODEL_TIER between tests
-function setTier(tier: string | undefined) {
-  if (tier === undefined) {
-    delete process.env.MODEL_TIER;
-  } else {
-    process.env.MODEL_TIER = tier;
+const ORIGINAL_ENV = { ...process.env };
+
+function setEnv(vars: Record<string, string | undefined>) {
+  for (const [k, v] of Object.entries(vars)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
   }
 }
 
-describe("model-router", () => {
-  const originalTier = process.env.MODEL_TIER;
+afterEach(() => {
+  // Restore original env after each test
+  for (const key of ["MODEL_LOW", "MODEL_STANDARD", "MODEL_PREMIUM"]) {
+    if (ORIGINAL_ENV[key] === undefined) delete process.env[key];
+    else process.env[key] = ORIGINAL_ENV[key];
+  }
+});
 
-  afterEach(() => {
-    setTier(originalTier);
+// ---------------------------------------------------------------------------
+// getModel — slot resolution and env var override
+// ---------------------------------------------------------------------------
+
+describe("getModel — defaults", () => {
+  beforeEach(() => setEnv({ MODEL_LOW: undefined, MODEL_STANDARD: undefined, MODEL_PREMIUM: undefined }));
+
+  it("low slot defaults to haiku", () => {
+    expect(getModel("low")).toContain("haiku");
   });
 
-  // ---------------------------------------------------------------------------
-  // Standard tier (default)
-  // ---------------------------------------------------------------------------
-
-  describe("standard tier", () => {
-    beforeEach(() => setTier("standard"));
-
-    it("uses sonnet for off-course main chat", () => {
-      expect(getMainModel(false)).toContain("sonnet");
-    });
-
-    it("uses haiku for on-course main chat", () => {
-      expect(getMainModel(true)).toContain("haiku");
-    });
-
-    it("uses haiku for utility calls", () => {
-      expect(getUtilityModel()).toContain("haiku");
-    });
-
-    it("reports tier as standard", () => {
-      expect(getActiveTier()).toBe("standard");
-    });
+  it("standard slot defaults to sonnet", () => {
+    expect(getModel("standard")).toContain("sonnet");
   });
 
-  // ---------------------------------------------------------------------------
-  // Economy tier
-  // ---------------------------------------------------------------------------
+  it("premium slot defaults to opus", () => {
+    expect(getModel("premium")).toContain("opus");
+  });
+});
 
-  describe("economy tier", () => {
-    beforeEach(() => setTier("economy"));
-
-    it("uses haiku for all calls (off-course)", () => {
-      expect(getMainModel(false)).toContain("haiku");
-    });
-
-    it("uses haiku for all calls (on-course)", () => {
-      expect(getMainModel(true)).toContain("haiku");
-    });
-
-    it("uses haiku for utility calls", () => {
-      expect(getUtilityModel()).toContain("haiku");
-    });
-
-    it("reports tier as economy", () => {
-      expect(getActiveTier()).toBe("economy");
-    });
+describe("getModel — env var overrides", () => {
+  it("MODEL_LOW overrides the low slot", () => {
+    setEnv({ MODEL_LOW: "claude-custom-low" });
+    expect(getModel("low")).toBe("claude-custom-low");
   });
 
-  // ---------------------------------------------------------------------------
-  // Premium tier
-  // ---------------------------------------------------------------------------
-
-  describe("premium tier", () => {
-    beforeEach(() => setTier("premium"));
-
-    it("uses opus for off-course main chat", () => {
-      expect(getMainModel(false)).toContain("opus");
-    });
-
-    it("uses sonnet for on-course (not opus — faster responses)", () => {
-      expect(getMainModel(true)).toContain("sonnet");
-    });
-
-    it("still uses haiku for utility calls", () => {
-      expect(getUtilityModel()).toContain("haiku");
-    });
-
-    it("reports tier as premium", () => {
-      expect(getActiveTier()).toBe("premium");
-    });
+  it("MODEL_STANDARD overrides the standard slot", () => {
+    setEnv({ MODEL_STANDARD: "claude-custom-standard" });
+    expect(getModel("standard")).toBe("claude-custom-standard");
   });
 
-  // ---------------------------------------------------------------------------
-  // Default / fallback behaviour
-  // ---------------------------------------------------------------------------
-
-  describe("default fallback", () => {
-    it("falls back to standard when MODEL_TIER is unset", () => {
-      setTier(undefined);
-      expect(getActiveTier()).toBe("standard");
-    });
-
-    it("falls back to standard for an unknown tier value", () => {
-      setTier("turbo");
-      expect(getActiveTier()).toBe("standard");
-    });
-
-    it("is case-insensitive — 'ECONOMY' resolves to economy tier", () => {
-      setTier("ECONOMY");
-      expect(getActiveTier()).toBe("economy");
-      expect(getMainModel(false)).toContain("haiku");
-    });
+  it("MODEL_PREMIUM overrides the premium slot", () => {
+    setEnv({ MODEL_PREMIUM: "claude-custom-premium" });
+    expect(getModel("premium")).toBe("claude-custom-premium");
   });
 
-  // ---------------------------------------------------------------------------
-  // On-course model is always ≤ off-course model (speed guarantee)
-  // ---------------------------------------------------------------------------
+  it("slots are independent — overriding one does not affect others", () => {
+    setEnv({ MODEL_LOW: "claude-custom-low", MODEL_STANDARD: undefined, MODEL_PREMIUM: undefined });
+    expect(getModel("low")).toBe("claude-custom-low");
+    expect(getModel("standard")).toContain("sonnet");
+    expect(getModel("premium")).toContain("opus");
+  });
+});
 
-  describe("on-course is never heavier than off-course", () => {
-    const tiers = ["economy", "standard", "premium"] as const;
+// ---------------------------------------------------------------------------
+// getMainModel — context-based routing
+// ---------------------------------------------------------------------------
 
-    for (const tier of tiers) {
-      it(`holds for ${tier} tier`, () => {
-        setTier(tier);
-        const onCourse = getMainModel(true);
-        const offCourse = getMainModel(false);
-        // On-course should never be opus when off-course is sonnet or haiku,
-        // and never be sonnet when off-course is haiku.
-        // Simplest invariant: if both are the same family it's fine; opus > sonnet > haiku
-        const weight = (m: string) =>
-          m.includes("opus") ? 3 : m.includes("sonnet") ? 2 : 1;
-        expect(weight(onCourse)).toBeLessThanOrEqual(weight(offCourse));
-      });
-    }
+describe("getMainModel — off-course standard", () => {
+  it("uses standard slot by default", () => {
+    expect(getMainModel()).toContain("sonnet");
+  });
+
+  it("isOnCourse=false, isComplex=false → standard", () => {
+    expect(getMainModel(false, false)).toContain("sonnet");
+  });
+});
+
+describe("getMainModel — on-course", () => {
+  it("on-course routes to low slot (fast responses)", () => {
+    expect(getMainModel(true)).toContain("haiku");
+  });
+
+  it("on-course takes priority over isComplex", () => {
+    // Even a complex request should use the fast model on-course
+    expect(getMainModel(true, true)).toContain("haiku");
+  });
+});
+
+describe("getMainModel — complex off-course", () => {
+  it("complex off-course routes to premium slot", () => {
+    expect(getMainModel(false, true)).toContain("opus");
+  });
+});
+
+describe("getMainModel — env var overrides flow through", () => {
+  it("overriding MODEL_STANDARD changes off-course default", () => {
+    setEnv({ MODEL_STANDARD: "claude-test-standard" });
+    expect(getMainModel(false, false)).toBe("claude-test-standard");
+  });
+
+  it("overriding MODEL_LOW changes on-course model", () => {
+    setEnv({ MODEL_LOW: "claude-test-low" });
+    expect(getMainModel(true)).toBe("claude-test-low");
+  });
+
+  it("overriding MODEL_PREMIUM changes complex model", () => {
+    setEnv({ MODEL_PREMIUM: "claude-test-premium" });
+    expect(getMainModel(false, true)).toBe("claude-test-premium");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getUtilityModel
+// ---------------------------------------------------------------------------
+
+describe("getUtilityModel", () => {
+  it("uses low slot by default", () => {
+    expect(getUtilityModel()).toContain("haiku");
+  });
+
+  it("overriding MODEL_LOW changes utility model", () => {
+    setEnv({ MODEL_LOW: "claude-test-low" });
+    expect(getUtilityModel()).toBe("claude-test-low");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Invariant: on-course ≤ off-course in capability
+// ---------------------------------------------------------------------------
+
+describe("on-course model is never heavier than off-course", () => {
+  const weight = (m: string) =>
+    m.includes("opus") ? 3 : m.includes("sonnet") ? 2 : 1;
+
+  it("holds with default env vars", () => {
+    expect(weight(getMainModel(true))).toBeLessThanOrEqual(weight(getMainModel(false)));
+  });
+
+  it("holds when MODEL_STANDARD is set to opus", () => {
+    setEnv({ MODEL_STANDARD: "claude-opus-4-8" });
+    // on-course still uses MODEL_LOW (haiku by default)
+    expect(weight(getMainModel(true))).toBeLessThanOrEqual(weight(getMainModel(false)));
   });
 });

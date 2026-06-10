@@ -1070,7 +1070,9 @@ export async function POST(req: NextRequest) {
 
     // API call
     const isOnCourse = !!roundContext?.courseId;
-    const activeModel = getMainModel(isOnCourse);
+    // Route to premium model for season plans; low for on-course; standard otherwise
+    const isComplex = /\b(season plan|roadmap|full plan|season goal|improvement plan)\b/i.test(message ?? "");
+    const activeModel = getMainModel(isOnCourse, isComplex);
     const response = await anthropic.messages.create({
       model: activeModel,
       max_tokens: 2048,
