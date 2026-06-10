@@ -1287,9 +1287,11 @@ export async function POST(req: NextRequest) {
       ); // intentionally not awaited
     }
 
-    // Fire-and-forget: update AI notes every 10 messages (no latency impact)
+    // Fire-and-forget: update AI notes every 4 messages, or immediately on
+    // high-signal messages (breakthroughs, explicit "remember" requests, scores).
     const newMessageCount = messageCount + 2; // user + assistant just added
-    if (!isGreeting && newMessageCount % 10 === 0) {
+    const isHighSignal = /\b(remember|breakthrough|figured out|finally|clicking|nailed it|shot \d+|broke \d+|best round|worst round|discovered|realized)\b/i.test(userMessage);
+    if (!isGreeting && (newMessageCount % 4 === 0 || isHighSignal)) {
       updateAiNotes(
         user.id,
         anthropic,
