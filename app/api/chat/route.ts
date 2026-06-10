@@ -536,7 +536,7 @@ Return only valid JSON. Already known: ${JSON.stringify(existing)}`,
 // Save practice plan tool
 const savePlanTool: Anthropic.Tool = {
   name: "save_plan",
-  description: "Save a structured practice session plan. Call this automatically whenever you've just built a practice plan with specific drills, durations, and structure in your response — e.g. 'Range Session - Weight Transfer' or 'Pre-Round Warm-Up'. Save it without waiting to be asked; the player can always delete it. Do NOT use this for swing notes, breakthroughs, reminders, or general advice — those go into long-term memory automatically.",
+  description: "Save a practice session plan AND deliver it to the player. When you build a structured practice plan (with specific drills, durations, and structure), call this tool to both save and present it — put the full formatted plan in the 'content' field. Do NOT write the plan as text first and then call the tool; call the tool directly so the plan is saved automatically. After the tool call succeeds, your follow-up message confirms it was saved and can highlight a key point or two. Do NOT use this for swing notes, breakthroughs, reminders, or general advice.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -1073,7 +1073,7 @@ export async function POST(req: NextRequest) {
     const activeModel = getMainModel(isOnCourse);
     const response = await anthropic.messages.create({
       model: activeModel,
-      max_tokens: 1024,
+      max_tokens: 2048,
       system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
       tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
       messages: apiMessages,
@@ -1097,9 +1097,10 @@ export async function POST(req: NextRequest) {
         });
         planSaved = true;
 
+        const planInput = toolBlock.input as { title: string; content: string };
         const followUp = await anthropic.messages.create({
           model: activeModel,
-          max_tokens: 512,
+          max_tokens: 1500,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
           tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
@@ -1109,15 +1110,18 @@ export async function POST(req: NextRequest) {
               role: "user", content: [{
                 type: "tool_result",
                 tool_use_id: toolBlock.id,
-                content: "Plan saved successfully.",
+                content: `Plan saved to Plans page. Now present the full plan to the player in chat so they can see it. Show the complete structured plan with all drills and details.`,
               }],
             },
           ],
         });
 
-        reply = followUp.content.find((b) => b.type === "text")?.type === "text"
+        const followUpText = followUp.content.find((b) => b.type === "text")?.type === "text"
           ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
           : "";
+
+        // If follow-up is short/empty, fall back to showing the plan content directly
+        reply = followUpText.length > 100 ? followUpText : `Here's your plan — I've saved it to your Plans page:\n\n**${planInput.title}**\n\n${planInput.content}`;
 
       } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "save_season_plan") {
         const input = toolBlock.input as { plan: string };
