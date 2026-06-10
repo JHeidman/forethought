@@ -353,21 +353,26 @@ async function updateAiNotes(
   existingAiNotes: string | null
 ): Promise<void> {
   try {
-    // Use service-role-equivalent client with anon key is fine here — we already have userId
+    const serviceKey = getEnvVar("SUPABASE_SERVICE_ROLE_KEY");
+    console.log("[updateAiNotes] start — userId:", userId, "hasServiceKey:", !!serviceKey);
+
     const { createClient } = await import("@supabase/supabase-js");
-    const adminClient = createClient(supabaseUrl, getEnvVar("SUPABASE_SERVICE_ROLE_KEY"), {
+    const adminClient = createClient(supabaseUrl, serviceKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
     // Fetch last 30 messages for this user
-    const { data: messages } = await adminClient
+    const { data: messages, error: msgErr } = await adminClient
       .from("messages")
       .select("role, content, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(30);
 
-    if (!messages || messages.length < 5) return; // not enough to summarize
+    if (msgErr) { console.error("[updateAiNotes] messages fetch error:", msgErr); return; }
+    if (!messages || messages.length < 5) { console.log("[updateAiNotes] not enough messages:", messages?.length); return; }
+
+    console.log("[updateAiNotes] summarizing", messages.length, "messages");
 
     const conversation = messages.reverse()
       .map((m: { role: string; content: string }) => `${m.role === "user" ? "Player" : "Caddy"}: ${m.content}`)
@@ -394,19 +399,23 @@ ${existingAiNotes || "None yet."}`,
     });
 
     const extracted = result.content[0].type === "text" ? result.content[0].text.trim() : "";
+    console.log("[updateAiNotes] extracted:", extracted.slice(0, 100));
     if (!extracted || extracted === "NOTHING_NEW") return;
 
     const updatedNotes = existingAiNotes
       ? `${existingAiNotes}\n${extracted}`
       : extracted;
 
-    await adminClient
+    const { error: updateErr } = await adminClient
       .from("profiles")
-      .update({ ai_notes: updatedNotes, updated_at: new Date().toISOString() })
+      .update({ ai_notes: updatedNotes })
       .eq("id", userId);
 
+    if (updateErr) console.error("[updateAiNotes] update error:", updateErr);
+    else console.log("[updateAiNotes] saved notes successfully");
+
   } catch (err) {
-    console.error("updateAiNotes error:", err);
+    console.error("[updateAiNotes] caught error:", err);
   }
 }
 
