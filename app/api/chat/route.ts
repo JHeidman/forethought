@@ -536,7 +536,7 @@ Return only valid JSON. Already known: ${JSON.stringify(existing)}`,
 // Save practice plan tool
 const savePlanTool: Anthropic.Tool = {
   name: "save_plan",
-  description: "Save a practice session plan AND deliver it to the player. When you build a structured practice plan (with specific drills, durations, and structure), call this tool to both save and present it — put the full formatted plan in the 'content' field. Do NOT write the plan as text first and then call the tool; call the tool directly so the plan is saved automatically. After the tool call succeeds, your follow-up message confirms it was saved and can highlight a key point or two. Do NOT use this for swing notes, breakthroughs, reminders, or general advice.",
+  description: "Save a practice session plan AND deliver it to the player. When you build a structured practice plan (with specific drills, durations, and structure), call this tool to both save and present it — put the full formatted plan in the 'content' field. Do NOT write the plan as text first and then call the tool; call the tool directly so the plan is saved automatically. IMPORTANT: you can only save ONE plan per message. If asked for multiple plans, save the first one and tell the player to ask for the next — say something like 'I can only save one at a time — want me to build the second one now?' Do NOT use this for swing notes, breakthroughs, reminders, or general advice.",
   input_schema: {
     type: "object" as const,
     properties: {
