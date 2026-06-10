@@ -1290,7 +1290,7 @@ export async function POST(req: NextRequest) {
     // Fire-and-forget: update AI notes every 4 messages, or immediately on
     // high-signal messages (breakthroughs, explicit "remember" requests, scores).
     const newMessageCount = messageCount + 2; // user + assistant just added
-    const isHighSignal = /\b(remember|breakthrough|figured out|finally|clicking|nailed it|shot \d+|broke \d+|best round|worst round|discovered|realized)\b/i.test(userMessage);
+    const isHighSignal = /\b(remember|breakthrough|figured out|finally|clicking|nailed it|shot \d+|broke \d+|best round|worst round|discovered|realized)\b/i.test(message ?? "");
     if (!isGreeting && (newMessageCount % 4 === 0 || isHighSignal)) {
       updateAiNotes(
         user.id,
