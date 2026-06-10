@@ -60,14 +60,14 @@ export default function PlansPage() {
   const hasAnything = seasonPlan || plans.length > 0;
 
   return (
-    <div className="min-h-full flex flex-col">
-      <header className="flex items-center justify-between px-4 py-4 border-b border-gray-800">
+    <div className="h-full flex flex-col overflow-hidden">
+      <header className="flex-shrink-0 flex items-center justify-between px-4 py-4 border-b border-gray-800">
         <Link href="/chat" className="text-green-400 text-sm">← Back</Link>
         <h1 className="text-lg font-semibold">My Plans</h1>
         <div className="w-16" />
       </header>
 
-      <div className="flex-1 px-4 py-6 max-w-lg mx-auto w-full space-y-6 pb-24">
+      <div className="flex-1 overflow-y-auto px-4 py-6 max-w-lg mx-auto w-full space-y-6 pb-24">
 
         {!hasAnything && (
           <div className="text-center mt-16">
