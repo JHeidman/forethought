@@ -1097,31 +1097,14 @@ export async function POST(req: NextRequest) {
         });
         planSaved = true;
 
-        const planInput = toolBlock.input as { title: string; content: string };
-        const followUp = await anthropic.messages.create({
-          model: activeModel,
-          max_tokens: 1500,
-          system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
-          messages: [
-            ...apiMessages,
-            { role: "assistant", content: response.content },
-            {
-              role: "user", content: [{
-                type: "tool_result",
-                tool_use_id: toolBlock.id,
-                content: `Plan saved to Plans page. Now present the full plan to the player in chat so they can see it. Show the complete structured plan with all drills and details.`,
-              }],
-            },
-          ],
-        });
-
-        const followUpText = followUp.content.find((b) => b.type === "text")?.type === "text"
-          ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
+        // Return the plan directly — no second Claude call needed (saves latency & avoids timeout)
+        // Any text Claude included before the tool call is shown first; plan content follows.
+        const textBefore = response.content.find((b) => b.type === "text")?.type === "text"
+          ? (response.content.find((b) => b.type === "text") as Anthropic.TextBlock).text.trim()
           : "";
-
-        // If follow-up is short/empty, fall back to showing the plan content directly
-        reply = followUpText.length > 100 ? followUpText : `Here's your plan — I've saved it to your Plans page:\n\n**${planInput.title}**\n\n${planInput.content}`;
+        reply = textBefore
+          ? `${textBefore}\n\n**${input.title}**\n\n${input.content}\n\n✅ Saved to your Plans page.`
+          : `Here's your plan — saved to your Plans page:\n\n**${input.title}**\n\n${input.content}`;
 
       } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "save_season_plan") {
         const input = toolBlock.input as { plan: string };
