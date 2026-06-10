@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse, after } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
@@ -1286,39 +1286,36 @@ export async function POST(req: NextRequest) {
 
     await supabase.from("messages").insert({ user_id: user.id, role: "assistant", content: reply });
 
-    // Use after() so these run after the response is sent but are guaranteed
-    // to complete before Vercel terminates the Lambda.
-    after(async () => {
-      // Save completed shot to history when player announces a club
-      if (shotContext?.lastShotClub && shotContext?.lastShotDistanceYards !== null) {
-        await saveShotToHistory(
-          user.id,
-          shotContext as ShotContext,
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          getEnvVar("SUPABASE_SERVICE_ROLE_KEY")
-        );
-      }
+    // Save completed shot to history when player announces a club
+    if (shotContext?.lastShotClub && shotContext?.lastShotDistanceYards !== null) {
+      saveShotToHistory(
+        user.id,
+        shotContext as ShotContext,
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        getEnvVar("SUPABASE_SERVICE_ROLE_KEY")
+      );
+    }
 
-      // Update AI notes every 4 messages, or immediately on high-signal messages
-      const newMessageCount = messageCount + 2;
-      const isHighSignal = /\b(remember|breakthrough|figured out|finally|clicking|nailed it|shot \d+|broke \d+|best round|worst round|discovered|realized)\b/i.test(message ?? "");
-      if (!isGreeting && (newMessageCount % 4 === 0 || isHighSignal)) {
-        await updateAiNotes(
-          user.id,
-          anthropic,
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          getEnvVar("SUPABASE_SERVICE_ROLE_KEY"),
-          profile.ai_notes ?? null
-        );
-      }
+    // Update AI notes — awaited to ensure it completes before Lambda exits.
+    // Only runs every 4 messages or on high-signal keywords, so latency impact is minimal.
+    const newMessageCount = messageCount + 2;
+    const isHighSignal = /\b(remember|breakthrough|figured out|finally|clicking|nailed it|shot \d+|broke \d+|best round|worst round|discovered|realized)\b/i.test(message ?? "");
+    if (!isGreeting && (newMessageCount % 4 === 0 || isHighSignal)) {
+      await updateAiNotes(
+        user.id,
+        anthropic,
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        getEnvVar("SUPABASE_SERVICE_ROLE_KEY"),
+        profile.ai_notes ?? null
+      );
+    }
 
-      // Mark announcements as read after greeting delivery
-      if (isGreeting && unreadAnnouncements.length > 0) {
-        const ids = unreadAnnouncements.map((a: AnnouncementItem) => a.id);
-        await supabase.from("user_announcement_reads")
-          .upsert(ids.map((id: string) => ({ user_id: user.id, announcement_id: id })), { onConflict: "user_id,announcement_id" });
-      }
-    });
+    // Mark announcements as read after greeting delivery
+    if (isGreeting && unreadAnnouncements.length > 0) {
+      const ids = unreadAnnouncements.map((a: AnnouncementItem) => a.id);
+      void supabase.from("user_announcement_reads")
+        .upsert(ids.map((id: string) => ({ user_id: user.id, announcement_id: id })), { onConflict: "user_id,announcement_id" });
+    }
 
     return NextResponse.json({
       reply,
