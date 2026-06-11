@@ -789,7 +789,7 @@ async function saveShotToHistory(
 
 export async function POST(req: NextRequest) {
   try {
-    const { message, isGreeting, roundContext, shotContext } = await req.json();
+    const { message, isGreeting, imageData, roundContext, shotContext } = await req.json();
     // roundContext: { courseId, courseName, tee, conditions } — injected when player is on course
     if (!message?.trim()) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
@@ -1053,7 +1053,15 @@ export async function POST(req: NextRequest) {
       content: m.content,
     }));
 
-    const newMessage = isGreeting ? "Please give your opening message now." : annotatedMessage;
+    const textContent = isGreeting ? "Please give your opening message now." : annotatedMessage;
+
+    // Build the new user message — multipart when an image is attached
+    const newUserContent: Anthropic.MessageParam["content"] = imageData
+      ? [
+          { type: "image", source: { type: "base64", media_type: imageData.mediaType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: imageData.base64 } },
+          { type: "text", text: textContent },
+        ]
+      : textContent;
 
     const apiMessages: Anthropic.MessageParam[] = [
       ...historyMessages.slice(0, -1),
@@ -1065,7 +1073,7 @@ export async function POST(req: NextRequest) {
           cache_control: { type: "ephemeral" as const },
         }],
       }] : []),
-      { role: "user" as const, content: newMessage },
+      { role: "user" as const, content: newUserContent },
     ];
 
     // API call

@@ -14,7 +14,6 @@ type Message = {
 };
 
 type AppState = "idle" | "listening" | "thinking" | "speaking";
-type ListenMode = "address" | "solo" | "interact" | "interact-vad";
 
 export default function ChatPage() {
   const router = useRouter();
@@ -23,7 +22,6 @@ export default function ChatPage() {
   const [appState, setAppState] = useState<AppState>("idle");
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
-  const [listenMode, setListenMode] = useState<ListenMode>("address");
   const [muted, setMuted] = useState(false);
   const [personaName, setPersonaName] = useState("Frankie");
   const [planSavedToast, setPlanSavedToast] = useState(false);
@@ -32,6 +30,8 @@ export default function ChatPage() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestionChips, setSuggestionChips] = useState<string[]>([]);
   const [playerGoal, setPlayerGoal] = useState<string | null>(null);
+  const [pendingImage, setPendingImage] = useState<{ base64: string; mediaType: string } | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
@@ -44,13 +44,8 @@ export default function ChatPage() {
   const currentGpsRef = useRef<{ lat: number; lon: number; accuracyMeters: number } | null>(null);
   const lastShotRef = useRef<{ club: string; gps: { lat: number; lon: number } } | null>(null);
 
-  // Voice mode refs — needed so async recognition callbacks always see latest values
-  const listenModeRef = useRef<ListenMode>(listenMode);
   const personaNameRef = useRef<string>("Frankie");
-  const autoListenActiveRef = useRef(false);   // true when address/solo loop is running
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const wakeLockRef = useRef<any>(null);
 
   function buildChips(goal: string | null): string[] {
     const hour = new Date().getHours();
@@ -244,44 +239,13 @@ export default function ChatPage() {
     };
   }, [activeRound]);
 
-  // Keep mode refs in sync with state
-  useEffect(() => { listenModeRef.current = listenMode; }, [listenMode]);
+  // Keep persona ref in sync
   useEffect(() => { personaNameRef.current = personaName; }, [personaName]);
 
-  // Restore + persist listen mode and mute state from localStorage (after hydration)
+  // Restore mute state from localStorage (after hydration)
   useEffect(() => {
-    const storedMode = localStorage.getItem("frankieListenMode") as ListenMode | null;
-    if (storedMode) setListenMode(storedMode);
     if (localStorage.getItem("frankieMuted") === "true") setMuted(true);
   }, []);
-  useEffect(() => { localStorage.setItem("frankieListenMode", listenMode); }, [listenMode]);
-
-  // Wake lock — keep screen on during auto-listen modes
-  useEffect(() => {
-    const isAutoMode = listenMode === "address" || listenMode === "solo";
-    if (isAutoMode && autoListenActiveRef.current && "wakeLock" in navigator) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (navigator as any).wakeLock.request("screen")
-        .then((lock: any) => { wakeLockRef.current = lock; })
-        .catch(() => {});
-    } else {
-      wakeLockRef.current?.release().catch(() => {});
-      wakeLockRef.current = null;
-    }
-  }, [listenMode]);
-
-  // Name check helpers for address mode
-  function containsPersonaName(transcript: string, name: string): boolean {
-    const t = transcript.toLowerCase();
-    const n = name.toLowerCase();
-    return t.includes(n);
-  }
-
-  function stripPersonaName(transcript: string, name: string): string {
-    return transcript
-      .replace(new RegExp(`^(hey\\s+|ok\\s+|okay\\s+)?${name}[,.]?\\s*`, "i"), "")
-      .trim();
-  }
 
   const isInitialLoad = useRef(true);
   useEffect(() => {
@@ -289,6 +253,34 @@ export default function ChatPage() {
     isInitialLoad.current = false;
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, [messages]);
+
+  function readImageFile(file: File): Promise<{ base64: string; mediaType: string }> {
+    return new Promise((resolve, reject) => {
+      if (!file.type.startsWith("image/")) { reject(new Error("Not an image")); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(",")[1];
+        resolve({ base64, mediaType: file.type });
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) readImageFile(file).then(setPendingImage).catch(() => {});
+  }
+
+  function handlePaste(e: React.ClipboardEvent) {
+    const file = Array.from(e.clipboardData.items)
+      .find(item => item.type.startsWith("image/"))
+      ?.getAsFile();
+    if (file) readImageFile(file).then(setPendingImage).catch(() => {});
+  }
 
   function toggleMute() {
     const next = !muted;
@@ -329,23 +321,21 @@ export default function ChatPage() {
       // Silently fail — text is still shown
     } finally {
       setAppState("idle");
-      // Auto-restart mic in looping modes after Frankie finishes speaking
-      const mode = listenModeRef.current;
-      if (autoListenActiveRef.current && (mode === "address" || mode === "solo")) {
-        setTimeout(() => startListening(true), 800); // slight delay so mic doesn't catch audio echo
-      }
     }
   }
 
   const sendMessage = useCallback(async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || appState === "thinking" || appState === "speaking") return;
+    if ((!trimmed && !pendingImage) || appState === "thinking" || appState === "speaking") return;
 
+    const imageToSend = pendingImage;
     setInput("");
+    setPendingImage(null);
     setShowSuggestions(false);
     setAppState("thinking");
     const tempId = crypto.randomUUID();
-    setMessages((prev) => [...prev, { id: tempId, role: "user", content: trimmed }]);
+    const displayText = trimmed || (imageToSend ? "📷 [image]" : "");
+    setMessages((prev) => [...prev, { id: tempId, role: "user", content: displayText }]);
 
     // Build shot context if on-course and player is announcing a club
     let shotContext: {
@@ -401,7 +391,7 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed, roundContext: activeRound, shotContext }),
+        body: JSON.stringify({ message: trimmed || "What do you see in this image?", imageData: imageToSend, roundContext: activeRound, shotContext }),
       });
       const data = await res.json();
 
@@ -431,22 +421,19 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "assistant", content: "Sorry, something went wrong." }]);
       setAppState("idle");
     }
-  }, [appState]);
+  }, [appState, pendingImage]);
 
-  function startListening(isAutoRestart = false) {
-    if (appState !== "idle" && !isAutoRestart) return;
+  function startListening() {
+    if (appState !== "idle") return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
     const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
     if (!SR) return;
 
-    const mode = listenModeRef.current;
     transcriptRef.current = "";
     setInput("");
     const recognition = new SR();
-
-    // Hold mode keeps mic open continuously; all others use single-utterance mode
-    recognition.continuous = mode === "interact";
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = "en-US";
 
@@ -465,68 +452,15 @@ export default function ChatPage() {
       }
       setInput(interim.trim());
 
-      // Hold mode: reset the safety inactivity timer on every result
-      if (mode === "interact") {
-        if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-        inactivityTimerRef.current = setTimeout(() => {
-          // Player forgot to untoggle — stop silently without sending
-          recognitionRef.current?.stop();
-          recognitionRef.current = null;
-          transcriptRef.current = "";
-          setInput("");
-          setAppState("idle");
-        }, 30000);
-      }
+      // Safety: auto-stop after 60s to prevent runaway sessions
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = setTimeout(() => stopListening(), 60000);
     };
 
+    recognition.onerror = () => setAppState("idle");
     recognition.onend = () => {
-      const currentMode = listenModeRef.current;
-      const transcript = transcriptRef.current.trim();
-
-      if (currentMode === "address") {
-        const name = personaNameRef.current;
-        if (transcript && containsPersonaName(transcript, name)) {
-          const stripped = stripPersonaName(transcript, name);
-          if (stripped) {
-            sendMessage(stripped);
-          } else {
-            setAppState("idle");
-            // Name only, no message — restart and wait
-            if (autoListenActiveRef.current) setTimeout(() => startListening(true), 600);
-          }
-        } else {
-          // Not addressed to Frankie — discard and restart
-          setAppState("idle");
-          if (autoListenActiveRef.current) setTimeout(() => startListening(true), 600);
-        }
-      } else if (currentMode === "solo") {
-        const wordCount = transcript.split(/\s+/).filter(Boolean).length;
-        if (transcript && wordCount >= 2) {
-          sendMessage(transcript);
-        } else {
-          // Too short (ambient noise) — restart
-          setAppState("idle");
-          if (autoListenActiveRef.current) setTimeout(() => startListening(true), 600);
-        }
-      } else if (currentMode === "interact-vad") {
-        // Auto-send when speech ends
-        if (transcript) sendMessage(transcript);
-        else setAppState("idle");
-        // No auto-restart — player taps for each message
-      }
-      // "interact" mode onend is handled by stopListening() manually
-    };
-
-    recognition.onerror = (event: { error: string }) => {
-      const currentMode = listenModeRef.current;
-      if (event.error === "no-speech" && autoListenActiveRef.current &&
-          (currentMode === "address" || currentMode === "solo")) {
-        // Normal timeout in looping modes — just restart quietly
-        setAppState("idle");
-        setTimeout(() => startListening(true), 400);
-      } else {
-        setAppState("idle");
-      }
+      // Only fires if recognition stops on its own (e.g. error) — not from stopListening()
+      setAppState("idle");
     };
 
     recognitionRef.current = recognition;
@@ -540,52 +474,14 @@ export default function ChatPage() {
     }
     recognitionRef.current?.stop();
     recognitionRef.current = null;
-
-    const mode = listenModeRef.current;
-    if (mode === "interact") {
-      // Manual stop — send whatever was accumulated
-      const transcript = transcriptRef.current.trim() || input.trim();
-      if (transcript) sendMessage(transcript);
-      else setAppState("idle");
-    } else {
-      // For other modes, onend handles sending — just clean up
-      setAppState("idle");
-    }
+    const transcript = transcriptRef.current.trim() || input.trim();
+    if (transcript) sendMessage(transcript);
+    else setAppState("idle");
   }
 
   function toggleListening() {
-    const mode = listenModeRef.current;
-
-    if (appState === "listening") {
-      if (mode === "interact") {
-        stopListening(); // manual stop + send
-      } else if (mode === "address" || mode === "solo") {
-        // Stop the auto-loop entirely
-        autoListenActiveRef.current = false;
-        recognitionRef.current?.stop();
-        recognitionRef.current = null;
-        wakeLockRef.current?.release().catch(() => {});
-        wakeLockRef.current = null;
-        setAppState("idle");
-      } else {
-        stopListening();
-      }
-    } else if (appState === "idle") {
-      if (mode === "address" || mode === "solo") {
-        // Activate auto-loop
-        autoListenActiveRef.current = true;
-        // Acquire wake lock to keep screen on
-        if ("wakeLock" in navigator) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (navigator as any).wakeLock.request("screen")
-            .then((lock: any) => { wakeLockRef.current = lock; })
-            .catch(() => {});
-        }
-        startListening();
-      } else {
-        startListening();
-      }
-    }
+    if (appState === "listening") stopListening();
+    else if (appState === "idle") startListening();
   }
 
   function stopSpeaking() {
@@ -593,25 +489,27 @@ export default function ChatPage() {
     setAppState("idle");
   }
 
-  function deactivateAutoListen() {
-    autoListenActiveRef.current = false;
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
-    wakeLockRef.current?.release().catch(() => {});
-    wakeLockRef.current = null;
-    if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-    setAppState("idle");
-  }
-
   const stateLabel: Record<AppState, string> = {
-    idle: voiceMode ? "Tap to speak" : "",
+    idle: "Tap to speak",
     listening: "Listening… tap to send",
     thinking: `${personaName} is thinking…`,
     speaking: `${personaName} is speaking…`,
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-950">
+    <div
+      className="flex flex-col h-full bg-gray-950"
+      onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+      onDragLeave={() => setIsDragOver(false)}
+      onDrop={handleDrop}
+    >
+      {isDragOver && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950 bg-opacity-80 pointer-events-none">
+          <div className="border-2 border-dashed border-green-500 rounded-2xl px-10 py-8 text-green-400 text-lg font-medium">
+            Drop image to attach
+          </div>
+        </div>
+      )}
       {/* Plan saved toast */}
       {planSavedToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg">
@@ -718,41 +616,7 @@ export default function ChatPage() {
 
       {/* Voice Mode */}
       {voiceMode ? (
-        <div className="shrink-0 border-t border-gray-800 px-4 pt-3 pb-6 flex flex-col items-center gap-3">
-
-          {/* Listen mode selector */}
-          <div className="flex gap-1.5 w-full">
-            {([
-              { mode: "address" as ListenMode, label: "Named",  title: `Say "${personaName}" first` },
-              { mode: "solo"    as ListenMode, label: "Solo",   title: "Always listening — no name needed" },
-              { mode: "interact" as ListenMode, label: "Hold",  title: "Tap to start, tap to send" },
-              { mode: "interact-vad" as ListenMode, label: "Auto", title: "Tap once, sends when you stop talking" },
-            ]).map(({ mode, label, title }) => (
-              <button
-                key={mode}
-                title={title}
-                onClick={() => {
-                  if (autoListenActiveRef.current) deactivateAutoListen();
-                  setListenMode(mode);
-                }}
-                className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  listenMode === mode
-                    ? "bg-green-700 text-white"
-                    : "bg-gray-800 text-gray-500 hover:text-gray-300"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {/* Mode hint */}
-          <p className="text-xs text-gray-600 text-center h-4">
-            {listenMode === "address" && `Say "${personaName}" to send`}
-            {listenMode === "solo"    && "Looping — tap mic to stop"}
-            {listenMode === "interact" && "Tap mic · speak · tap to send · auto-stops after 30s"}
-            {listenMode === "interact-vad" && "Tap mic · speak · sends when you go quiet"}
-          </p>
+        <div className="shrink-0 border-t border-gray-800 px-4 pt-4 pb-6 flex flex-col items-center gap-3">
 
           {/* Interim transcript */}
           {input && appState === "listening" && (
@@ -765,9 +629,7 @@ export default function ChatPage() {
             appState === "speaking"  ? "text-blue-400"  :
             appState === "thinking"  ? "text-yellow-400" : "text-gray-500"
           }`}>
-            {listenMode === "address" && appState === "listening"
-              ? `Listening for "${personaName}"…`
-              : stateLabel[appState]}
+            {stateLabel[appState]}
           </p>
 
           {appState === "speaking" ? (
@@ -786,8 +648,6 @@ export default function ChatPage() {
                   ? "bg-red-600 scale-110 ring-4 ring-red-400 ring-opacity-50"
                   : appState === "thinking"
                   ? "bg-gray-700 opacity-50 cursor-not-allowed"
-                  : (listenMode === "address" || listenMode === "solo") && autoListenActiveRef.current
-                  ? "bg-green-800 ring-2 ring-green-500 ring-opacity-60 hover:bg-green-700"
                   : "bg-green-600 hover:bg-green-500 active:scale-95"
               }`}
             >
@@ -797,35 +657,70 @@ export default function ChatPage() {
             </button>
           )}
 
-          <button onClick={() => { deactivateAutoListen(); setVoiceMode(false); }} className="text-xs text-gray-600 hover:text-gray-400">Switch to text</button>
+          <button onClick={() => setVoiceMode(false)} className="text-xs text-gray-600 hover:text-gray-400">Switch to text</button>
         </div>
       ) : (
         /* Text Mode */
-        <form onSubmit={(e) => { e.preventDefault(); sendMessage(input); }} className="shrink-0 border-t border-gray-800 bg-gray-950 px-3 py-3 flex items-end gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(input); } }}
-            placeholder={`Ask ${personaName} anything…`}
-            rows={1}
-            disabled={appState !== "idle"}
-            className="flex-1 rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-base resize-none focus:outline-none focus:border-green-500 max-h-32 disabled:opacity-50"
-          />
-          {voiceSupported && (
-            <button type="button" onClick={toggleListening}
-              disabled={appState === "thinking" || appState === "speaking"}
-              className={`shrink-0 rounded-xl p-3 transition-colors disabled:opacity-40 ${appState === "listening" ? "bg-red-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
+        <form onSubmit={(e) => { e.preventDefault(); sendMessage(input); }} className="shrink-0 border-t border-gray-800 bg-gray-950 px-3 pt-2 pb-3 flex flex-col gap-2">
+          {/* Image preview */}
+          {pendingImage && (
+            <div className="relative w-20 h-20 ml-1">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`data:${pendingImage.mediaType};base64,${pendingImage.base64}`}
+                alt="Attached"
+                className="w-20 h-20 object-cover rounded-xl border border-gray-700"
+              />
+              <button
+                type="button"
+                onClick={() => setPendingImage(null)}
+                className="absolute -top-1 -right-1 w-5 h-5 bg-gray-900 border border-gray-600 rounded-full text-gray-400 hover:text-white text-xs flex items-center justify-center"
+              >✕</button>
+            </div>
+          )}
+          <div className="flex items-end gap-2">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(input); } }}
+              onPaste={handlePaste}
+              placeholder={`Ask ${personaName} anything…`}
+              rows={1}
+              disabled={appState !== "idle"}
+              className="flex-1 rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-base resize-none focus:outline-none focus:border-green-500 max-h-32 disabled:opacity-50"
+            />
+            {/* Image file picker */}
+            <label className={`shrink-0 rounded-xl p-3 cursor-pointer transition-colors ${pendingImage ? "bg-green-800 text-green-300" : "bg-gray-800 text-gray-400 hover:text-white"} ${appState !== "idle" ? "opacity-40 pointer-events-none" : ""}`}>
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) readImageFile(file).then(setPendingImage).catch(() => {});
+                  e.target.value = "";
+                }}
+              />
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            </label>
+            {voiceSupported && (
+              <button type="button" onClick={toggleListening}
+                disabled={appState === "thinking" || appState === "speaking"}
+                className={`shrink-0 rounded-xl p-3 transition-colors disabled:opacity-40 ${appState === "listening" ? "bg-red-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+              </button>
+            )}
+            <button type="submit" disabled={(!input.trim() && !pendingImage) || appState !== "idle"}
+              className="shrink-0 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-40 px-4 py-3 text-white font-semibold transition-colors">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
               </svg>
             </button>
-          )}
-          <button type="submit" disabled={!input.trim() || appState !== "idle"}
-            className="shrink-0 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-40 px-4 py-3 text-white font-semibold transition-colors">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-            </svg>
-          </button>
+          </div>
         </form>
       )}
     </div>
