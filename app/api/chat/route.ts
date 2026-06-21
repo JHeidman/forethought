@@ -1427,6 +1427,45 @@ export async function POST(req: NextRequest) {
 
     await supabase.from("messages").insert({ user_id: user.id, role: "assistant", content: reply });
 
+    // Auto-detect persona gaps server-side — catches cases where Frankie replies without calling the tool
+    if (!isGreeting && reply) {
+      const GAP_PHRASES = [
+        /\boutside my wheelhouse\b/i,
+        /\bcan't check\b/i,
+        /\bcan't see\b/i,
+        /\bcan't watch\b/i,
+        /\bcan't open\b/i,
+        /\bcan't access\b/i,
+        /\bcannot check\b/i,
+        /\bcannot see\b/i,
+        /\bcannot watch\b/i,
+        /\bcannot open\b/i,
+        /\bcannot access\b/i,
+        /\bno way (for me|to check|to see)\b/i,
+        /\bnot (able|equipped) to (check|see|watch|access)\b/i,
+        /\bbeyond (my|what I can)\b/i,
+        /\b(weather|forecast|temperature|conditions).{0,60}(check|look up|pull up|can't)\b/i,
+        /\b(can't|cannot|don't have).{0,40}(real.?time|live|current|today'?s)\b/i,
+      ];
+      const hasGap = GAP_PHRASES.some(re => re.test(reply));
+      if (hasGap) {
+        const serviceKey = getEnvVar("SUPABASE_SERVICE_ROLE_KEY");
+        if (serviceKey) {
+          import("@supabase/supabase-js").then(({ createClient: createAdmin }) => {
+            const adminClient = createAdmin(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
+              auth: { autoRefreshToken: false, persistSession: false },
+            });
+            void adminClient.from("feedback").insert({
+              user_id: user.id,
+              type: "persona_gap",
+              description: `Auto-detected: Frankie broke persona. Reply excerpt: "${reply.substring(0, 300)}"`,
+              user_message: message ?? "",
+            });
+          }).catch(console.error);
+        }
+      }
+    }
+
     // Save completed shot to history when player announces a club
     if (shotContext?.lastShotClub && shotContext?.lastShotDistanceYards !== null) {
       saveShotToHistory(
