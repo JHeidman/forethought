@@ -534,6 +534,19 @@ Return only valid JSON. Already known: ${JSON.stringify(existing)}`,
 }
 
 // Save practice plan tool
+// Course lookup tool — lets Frankie search for a course and discuss it in normal chat
+const lookupCourseTool: Anthropic.Tool = {
+  name: "lookup_course",
+  description: "Search for a golf course by name and retrieve its scorecard data. Use this whenever the player mentions a course they play, played, or are planning to play — even in normal conversation outside of on-course mode. A good caddy knows their player's courses. Call this proactively when a course name is mentioned so you can discuss hole yardages, layout, strategy, and what to watch out for.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      course_name: { type: "string", description: "The name of the course to search for" },
+    },
+    required: ["course_name"],
+  },
+};
+
 const savePlanTool: Anthropic.Tool = {
   name: "save_plan",
   description: "Save a practice session plan AND deliver it to the player. When you build a structured practice plan (with specific drills, durations, and structure), call this tool to both save and present it — put the full formatted plan in the 'content' field. Do NOT write the plan as text first and then call the tool; call the tool directly so the plan is saved automatically. IMPORTANT: you can only save ONE plan per message. If asked for multiple plans, save the first one and tell the player to ask for the next — say something like 'I can only save one at a time — want me to build the second one now?' Do NOT use this for swing notes, breakthroughs, reminders, or general advice.",
@@ -1024,7 +1037,8 @@ export async function POST(req: NextRequest) {
 
     const capabilitiesBlock = `YOUR APP CAPABILITIES (answer questions about these confidently — they are YOUR features):
 - Voice mode: tap the mic button to talk. Tap to start, tap again to send. Simple as that.
-- Course mode & scorecard: tap "Playing today? Set your course" at the top of the chat to search for your course by name. Once you start a round, I'll have the full hole-by-hole scorecard — yardages, par, handicap index — for every hole. I can then give you precise club recommendations and course management advice for each specific hole. IMPORTANT: if the player mentions they're heading to a course or playing today, ALWAYS prompt them to tap "Playing today? Set your course" so I can load the scorecard. Never say you don't know a course or don't have course data — instead say something like "Tap 'Playing today? Set your course' at the top of the chat and I'll have the full scorecard loaded for us."
+- Course knowledge: you can look up any course the player mentions using the lookup_course tool. Do this proactively — if they mention a course in conversation, look it up and talk about it like you know it. A real caddy does their homework. In on-course mode (active round) the full scorecard is already loaded for you. In normal chat, call lookup_course whenever a course comes up.
+- Course mode (on-course GPS): tap "Playing today? Set your course" at the top of chat to activate GPS shot tracking, distance measurement, and live hole-by-hole mode.
 - GPS shot tracking: when playing a round, say the club you're using before you hit ("hitting my 7-iron") and I'll measure the distance automatically with GPS. After several rounds I'll build real averages and suggest yardage updates. Say "I shanked that" to exclude a shot.
 - Season planning: tell me a goal ("break 90 by August") and I'll build you a personalised season roadmap. Ask anytime or wait for me to offer when I've gathered enough. Saved plans are on the Plans page.
 - Club bag: your full bag is on the Profile page with distances, shaft flex, loft, and shot shape. Edit any club to give me better data for recommendations.
@@ -1086,7 +1100,7 @@ export async function POST(req: NextRequest) {
       model: activeModel,
       max_tokens: 2048,
       system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-      tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+      tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
       messages: apiMessages,
     });
 
@@ -1098,7 +1112,51 @@ export async function POST(req: NextRequest) {
     if (response.stop_reason === "tool_use") {
       const toolBlock = response.content.find((b) => b.type === "tool_use");
 
-      if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "save_plan") {
+      if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "lookup_course") {
+        const input = toolBlock.input as { course_name: string };
+        const { searchCourses, getCourseDetail, formatScorecardForPrompt } = await import("@/lib/golf-course-api");
+        const gender = (profile.gender === "female" ? "female" : "male") as "male" | "female";
+
+        let courseResult = "No course found matching that name.";
+        try {
+          const results = await searchCourses(input.course_name);
+          if (results.length > 0) {
+            const detail = await getCourseDetail(results[0].id);
+            if (detail) {
+              // Pick the most common men's tee (White) or first available
+              const teeSet = detail.tees[gender] ?? detail.tees.male;
+              const tee = teeSet.find(t => t.tee_name.toLowerCase() === "white") ?? teeSet[0];
+              const teeName = tee?.tee_name ?? "default";
+              courseResult = formatScorecardForPrompt(detail, teeName, gender);
+            }
+          }
+        } catch (err) {
+          console.error("lookup_course error:", err);
+        }
+
+        const followUp = await anthropic.messages.create({
+          model: activeModel,
+          max_tokens: 1024,
+          system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
+          tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          messages: [
+            ...apiMessages,
+            { role: "assistant", content: response.content },
+            {
+              role: "user", content: [{
+                type: "tool_result",
+                tool_use_id: toolBlock.id,
+                content: courseResult,
+              }],
+            },
+          ],
+        });
+
+        reply = followUp.content.find((b) => b.type === "text")?.type === "text"
+          ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
+          : "";
+
+      } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "save_plan") {
         const input = toolBlock.input as { title: string; content: string };
 
         await supabase.from("practice_plans").insert({
@@ -1131,7 +1189,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 512,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1166,7 +1224,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1207,7 +1265,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1250,7 +1308,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
