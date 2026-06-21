@@ -133,22 +133,16 @@ export default function AdminPage() {
 
   async function loadFeedback() {
     setFeedbackLoading(true);
-    const supabase = createClient();
-    const { data: feedbackData } = await supabase
-      .from("feedback")
-      .select("*, profiles(name)")
-      .order("created_at", { ascending: false })
-      .limit(100);
-    setFeedback((feedbackData ?? []).map((f: FeedbackItem & { profiles?: { name: string } }) => ({
-      ...f,
-      userName: f.profiles?.name ?? "Unknown",
-    })));
+    const res = await fetch("/api/admin/feedback");
+    if (res.ok) {
+      const data = await res.json();
+      setFeedback(data.feedback ?? []);
+    }
     setFeedbackLoading(false);
   }
 
   async function deleteFeedback(id: string) {
-    const supabase = createClient();
-    await supabase.from("feedback").delete().eq("id", id);
+    await fetch("/api/admin/feedback", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     setFeedback(prev => prev.filter(f => f.id !== id));
   }
 

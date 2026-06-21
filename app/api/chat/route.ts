@@ -1177,12 +1177,13 @@ export async function POST(req: NextRequest) {
         if (textBefore) {
           reply = textBefore;
         } else {
-          // No text before tool — ask Frankie to reply now
+          // No text before tool — ask Frankie to reply now (tool_choice forced to none so she can't loop)
           const followUp = await anthropic.messages.create({
             model: activeModel,
             max_tokens: 512,
             system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
             tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+            tool_choice: { type: "none" },
             messages: [
               ...apiMessages,
               { role: "assistant", content: response.content },
@@ -1191,7 +1192,7 @@ export async function POST(req: NextRequest) {
           });
           reply = followUp.content.find((b) => b.type === "text")?.type === "text"
             ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
-            : "";
+            : "I noted that — what else can I help you with?";
         }
 
       } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "lookup_course") {
