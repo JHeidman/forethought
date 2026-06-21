@@ -29,7 +29,7 @@ type UserStat = {
 
 export default function AdminPage() {
   const router = useRouter();
-  const [tab, setTab] = useState<"users" | "prompt" | "codes" | "news">("users");
+  const [tab, setTab] = useState<"users" | "prompt" | "codes" | "news" | "feedback">("users");
   const [unauthorized, setUnauthorized] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -58,6 +58,11 @@ export default function AdminPage() {
   const [codesSaving, setCodesSaving] = useState(false);
   const [codesSaved, setCodesSaved] = useState(false);
 
+  // Feedback tab
+  type FeedbackItem = { id: string; type: "persona_gap" | "user_suggestion"; description: string; user_message: string; created_at: string; user_id: string; userName?: string };
+  const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+
   useEffect(() => {
     async function init() {
       const supabase = createClient();
@@ -78,6 +83,7 @@ export default function AdminPage() {
       setLoading(false);
       loadUsers();
       loadAnnouncements();
+      loadFeedback();
     }
     init();
   }, []);
@@ -123,6 +129,27 @@ export default function AdminPage() {
 
   function removeCode(code: string) {
     setCodes(codes.filter(c => c.code !== code));
+  }
+
+  async function loadFeedback() {
+    setFeedbackLoading(true);
+    const supabase = createClient();
+    const { data: feedbackData } = await supabase
+      .from("feedback")
+      .select("*, profiles(name)")
+      .order("created_at", { ascending: false })
+      .limit(100);
+    setFeedback((feedbackData ?? []).map((f: FeedbackItem & { profiles?: { name: string } }) => ({
+      ...f,
+      userName: f.profiles?.name ?? "Unknown",
+    })));
+    setFeedbackLoading(false);
+  }
+
+  async function deleteFeedback(id: string) {
+    const supabase = createClient();
+    await supabase.from("feedback").delete().eq("id", id);
+    setFeedback(prev => prev.filter(f => f.id !== id));
   }
 
   async function loadAnnouncements() {
@@ -192,7 +219,7 @@ export default function AdminPage() {
 
       {/* Tabs */}
       <div className="flex border-b border-gray-800 shrink-0">
-        {([["users", "👥 Users"], ["prompt", "✏️ Prompt"], ["codes", "🔑 Codes"], ["news", "📢 News"]] as [typeof tab, string][]).map(([key, label]) => (
+        {([["users", "👥 Users"], ["prompt", "✏️ Prompt"], ["codes", "🔑 Codes"], ["news", "📢 News"], ["feedback", "💬 Feedback"]] as [typeof tab, string][]).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)}
             className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${tab === key ? "border-green-500 text-green-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>
             {label}
@@ -436,6 +463,51 @@ export default function AdminPage() {
                 {newsSaving ? "Adding…" : "Add Announcement"}
               </button>
             </form>
+          </div>
+        )}
+
+        {/* Feedback Tab */}
+        {tab === "feedback" && (
+          <div className="p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400">{feedback.length} items</p>
+                <p className="text-xs text-gray-600 mt-0.5">Persona gaps Frankie filed + player suggestions from chat</p>
+              </div>
+              <button onClick={loadFeedback} disabled={feedbackLoading} className="text-xs text-gray-500 hover:text-gray-300">
+                {feedbackLoading ? "Loading…" : "↻ Refresh"}
+              </button>
+            </div>
+
+            {feedbackLoading && feedback.length === 0 && (
+              <p className="text-gray-500 text-sm">Loading…</p>
+            )}
+
+            {!feedbackLoading && feedback.length === 0 && (
+              <p className="text-gray-600 text-sm">Nothing yet — gaps and suggestions will appear here as players chat.</p>
+            )}
+
+            <div className="space-y-3">
+              {feedback.map(f => (
+                <div key={f.id} className={`rounded-xl p-4 border ${f.type === "persona_gap" ? "bg-red-950 border-red-800" : "bg-blue-950 border-blue-800"}`}>
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${f.type === "persona_gap" ? "bg-red-900 text-red-300" : "bg-blue-900 text-blue-300"}`}>
+                      {f.type === "persona_gap" ? "⚠️ Persona gap" : "💡 Suggestion"}
+                    </span>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="text-xs text-gray-500">{f.userName} · {formatDate(f.created_at)}</span>
+                      <button onClick={() => deleteFeedback(f.id)} className="text-xs text-gray-600 hover:text-red-400">✕</button>
+                    </div>
+                  </div>
+                  <p className="text-white text-sm leading-relaxed">{f.description}</p>
+                  {f.user_message && (
+                    <p className="text-xs text-gray-500 mt-2 italic border-t border-gray-700 pt-2">
+                      &ldquo;{f.user_message}&rdquo;
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

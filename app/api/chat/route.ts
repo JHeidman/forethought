@@ -264,6 +264,12 @@ RULES:
 - Speak like a person, not a manual.
 - Reference past conversations and what you know about their game whenever relevant.
 
+PERSONA GAP REPORTING — MANDATORY:
+You are always a real caddy. Whenever you find yourself about to say you can't do something a real caddy would do (can't see a video, don't know a course, can't check weather, etc.), call report_persona_gap SILENTLY alongside your reply. The player never knows you filed a report — just respond naturally, then call the tool. Examples that should trigger it: video links you can't watch, requests to check live data you don't have, anything where you have to apologize for a limitation.
+
+USER SUGGESTIONS:
+When a player expresses a feature idea or improvement — "it would be cool if...", "can you...", "I wish you could...", "what if you..." — acknowledge it warmly in your reply AND call submit_suggestion. Don't make a big deal of it. Something like "Good idea — I'll pass that along" is enough. Log it even if it's something you can already do (the player thinks you can't, which is useful signal).
+
 HONESTY — CRITICAL:
 - You can ONLY see and analyze content directly provided as text or images in this conversation.
 - If a user shares a URL or video link, you CANNOT watch it, open it, or see its contents. Be honest about this. Say something like "I can't actually open that link — if you grab a screenshot or photo from the video, I can genuinely analyze that."
@@ -534,6 +540,33 @@ Return only valid JSON. Already known: ${JSON.stringify(existing)}`,
 }
 
 // Save practice plan tool
+// Persona gap / user suggestion reporting tools
+const reportPersonaGapTool: Anthropic.Tool = {
+  name: "report_persona_gap",
+  description: "Report a situation where you cannot respond as a real caddy would. Call this SILENTLY (the player never sees it) whenever you find yourself about to say you can't do something a real caddy would do — e.g. 'I can't see that video', 'I don't know that course', 'I can't check the weather'. Describe what you couldn't do and what a real caddy would have done. This feeds directly into the development backlog.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      gap: { type: "string", description: "What you couldn't do that a real caddy would do. Be specific — e.g. 'Could not watch the swing video the player shared. A real caddy would analyze their takeaway and tempo from the footage.'" },
+      user_message: { type: "string", description: "The player's message that triggered the gap, verbatim." },
+    },
+    required: ["gap", "user_message"],
+  },
+};
+
+const submitSuggestionTool: Anthropic.Tool = {
+  name: "submit_suggestion",
+  description: "Capture a feature suggestion or improvement idea expressed by the player in natural conversation. Call this when the player says something like 'it would be cool if...', 'can you...', 'I wish you could...', 'what about...', or anything that sounds like a product idea. Acknowledge their suggestion naturally in your reply, then call this tool. The suggestion goes directly to the development team.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      suggestion: { type: "string", description: "The player's idea, captured in their own words as much as possible." },
+      user_message: { type: "string", description: "The player's message that contained the suggestion, verbatim." },
+    },
+    required: ["suggestion", "user_message"],
+  },
+};
+
 // Course lookup tool — lets Frankie search for a course and discuss it in normal chat
 const lookupCourseTool: Anthropic.Tool = {
   name: "lookup_course",
@@ -1100,7 +1133,7 @@ export async function POST(req: NextRequest) {
       model: activeModel,
       max_tokens: 2048,
       system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-      tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+      tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
       messages: apiMessages,
     });
 
@@ -1112,7 +1145,56 @@ export async function POST(req: NextRequest) {
     if (response.stop_reason === "tool_use") {
       const toolBlock = response.content.find((b) => b.type === "tool_use");
 
-      if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "lookup_course") {
+      if (toolBlock && toolBlock.type === "tool_use" &&
+          (toolBlock.name === "report_persona_gap" || toolBlock.name === "submit_suggestion")) {
+        const input = toolBlock.input as { gap?: string; suggestion?: string; user_message: string };
+        const type = toolBlock.name === "report_persona_gap" ? "persona_gap" : "user_suggestion";
+        const description = input.gap ?? input.suggestion ?? "";
+
+        // Save silently — use service role to bypass RLS
+        try {
+          const serviceKey = getEnvVar("SUPABASE_SERVICE_ROLE_KEY");
+          const { createClient: createAdmin } = await import("@supabase/supabase-js");
+          const adminClient = createAdmin(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
+            auth: { autoRefreshToken: false, persistSession: false },
+          });
+          await adminClient.from("feedback").insert({
+            user_id: user.id,
+            type,
+            description,
+            user_message: input.user_message,
+          });
+        } catch (err) {
+          console.error("feedback insert error:", err);
+        }
+
+        // For suggestions: let Frankie reply naturally acknowledging the idea.
+        // For gaps: Frankie already responded before calling the tool — use that text.
+        const textBefore = response.content.find((b) => b.type === "text")?.type === "text"
+          ? (response.content.find((b) => b.type === "text") as Anthropic.TextBlock).text.trim()
+          : "";
+
+        if (textBefore) {
+          reply = textBefore;
+        } else {
+          // No text before tool — ask Frankie to reply now
+          const followUp = await anthropic.messages.create({
+            model: activeModel,
+            max_tokens: 512,
+            system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
+            tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+            messages: [
+              ...apiMessages,
+              { role: "assistant", content: response.content },
+              { role: "user", content: [{ type: "tool_result", tool_use_id: toolBlock.id, content: "Logged." }] },
+            ],
+          });
+          reply = followUp.content.find((b) => b.type === "text")?.type === "text"
+            ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
+            : "";
+        }
+
+      } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "lookup_course") {
         const input = toolBlock.input as { course_name: string };
         const { searchCourses, getCourseDetail, formatScorecardForPrompt } = await import("@/lib/golf-course-api");
         const gender = (profile.gender === "female" ? "female" : "male") as "male" | "female";
@@ -1138,7 +1220,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 1024,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1189,7 +1271,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 512,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1224,7 +1306,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1265,7 +1347,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1308,7 +1390,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
