@@ -438,7 +438,7 @@ export default function ChatPage() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.name : String(err);
       if (msg === "NotAllowedError" || msg === "PermissionDeniedError") {
-        setMicError("Microphone blocked. Tap the address bar lock icon → Site Settings → allow Microphone.");
+        setMicError("Microphone blocked. On iPhone: open the Settings app → Chrome → turn on Microphone, then reload this page.");
       } else if (msg === "NotFoundError") {
         setMicError("No microphone found on this device.");
       } else {
