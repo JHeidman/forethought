@@ -31,6 +31,7 @@ export default function ChatPage() {
   const [playerGoal, setPlayerGoal] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<{ base64: string; mediaType: string } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -424,55 +425,72 @@ export default function ChatPage() {
 
   async function startListening() {
     if (appState !== "idle") return;
+    setMicError(null);
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicError("Microphone not available. Use Safari on iPhone, or check browser permissions.");
+      return;
+    }
+
+    let stream: MediaStream;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.name : String(err);
+      if (msg === "NotAllowedError" || msg === "PermissionDeniedError") {
+        setMicError("Microphone blocked. Tap the address bar lock icon → Site Settings → allow Microphone.");
+      } else if (msg === "NotFoundError") {
+        setMicError("No microphone found on this device.");
+      } else {
+        setMicError(`Mic error: ${msg}`);
+      }
+      return;
+    }
+
+    streamRef.current = stream;
+    audioChunksRef.current = [];
+
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/mp4")
+      ? "audio/mp4"
+      : undefined;
+
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data);
+    };
+
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+
+      const blob = new Blob(audioChunksRef.current, { type: mimeType ?? "audio/webm" });
       audioChunksRef.current = [];
 
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/mp4")
-        ? "audio/mp4"
-        : undefined;
+      if (blob.size < 500) { setAppState("idle"); return; }
 
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-
-        const blob = new Blob(audioChunksRef.current, { type: mimeType ?? "audio/webm" });
-        audioChunksRef.current = [];
-
-        if (blob.size < 500) { setAppState("idle"); return; }
-
-        setAppState("transcribing");
-        try {
-          const ext = (mimeType ?? "").includes("mp4") ? "mp4" : (mimeType ?? "").includes("ogg") ? "ogg" : "webm";
-          const form = new FormData();
-          form.append("audio", blob, `recording.${ext}`);
-          const res = await fetch("/api/transcribe", { method: "POST", body: form });
-          const data = await res.json();
-          if (data.text?.trim()) {
-            await sendMessageRef.current(data.text.trim());
-          } else {
-            setAppState("idle");
-          }
-        } catch {
+      setAppState("transcribing");
+      try {
+        const ext = (mimeType ?? "").includes("mp4") ? "mp4" : (mimeType ?? "").includes("ogg") ? "ogg" : "webm";
+        const form = new FormData();
+        form.append("audio", blob, `recording.${ext}`);
+        const res = await fetch("/api/transcribe", { method: "POST", body: form });
+        const data = await res.json();
+        if (data.text?.trim()) {
+          await sendMessageRef.current(data.text.trim());
+        } else {
           setAppState("idle");
         }
-      };
+      } catch {
+        setAppState("idle");
+      }
+    };
 
-      mediaRecorderRef.current = recorder;
-      recorder.start();
-      setAppState("listening");
-    } catch {
-      setAppState("idle");
-    }
+    mediaRecorderRef.current = recorder;
+    recorder.start();
+    setAppState("listening");
   }
 
   function stopListening() {
@@ -620,9 +638,8 @@ export default function ChatPage() {
       {voiceMode ? (
         <div className="shrink-0 border-t border-gray-800 px-4 pt-4 pb-6 flex flex-col items-center gap-3">
 
-          {/* Interim transcript */}
-          {input && appState === "listening" && (
-            <p className="text-gray-400 text-sm text-center italic max-w-xs">{input}</p>
+          {micError && (
+            <p className="text-red-400 text-xs text-center max-w-xs leading-snug">{micError}</p>
           )}
 
           {/* State label */}
