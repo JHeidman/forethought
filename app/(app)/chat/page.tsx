@@ -503,8 +503,10 @@ export default function ChatPage() {
         form.append("audio", blob, `recording.${ext}`);
         const res = await fetch("/api/transcribe", { method: "POST", body: form });
         const data = await res.json();
-        if (data.text?.trim()) {
-          await sendMessageRef.current(data.text.trim());
+        const text = data.text?.trim() ?? "";
+        const NOISE_PHRASES = /^(\.+|you\.?|thank you\.?|thanks\.?|bye\.?|okay\.?|ok\.?|um\.?|uh\.?|hmm\.?|\s*)$/i;
+        if (text && text.split(/\s+/).length >= 2 && !NOISE_PHRASES.test(text)) {
+          await sendMessageRef.current(text);
         } else {
           setAppState("idle");
         }
@@ -523,9 +525,9 @@ export default function ChatPage() {
         ctx.createMediaStreamSource(stream).connect(analyser);
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-        const THRESHOLD = 12;       // 0-255 volume level — below this is silence
+        const THRESHOLD = 22;       // 0-255 volume level — below this is silence
         const SILENCE_MS = 1800;    // stop after this much silence
-        const MIN_SPEECH_MS = 400;  // don't stop until user has spoken at least this long
+        const MIN_SPEECH_MS = 600;  // don't stop until user has spoken at least this long
         let hasSpeech = false;
         let silenceStart: number | null = null;
         const speechStart = Date.now();
