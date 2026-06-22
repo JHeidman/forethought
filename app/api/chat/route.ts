@@ -567,6 +567,19 @@ const submitSuggestionTool: Anthropic.Tool = {
   },
 };
 
+// Generic web search — gives Frankie real-time internet access for anything golf-relevant
+const searchWebTool: Anthropic.Tool = {
+  name: "search_web",
+  description: "Search the internet for current, real-time, or specific information you don't already have. Use for: weather forecasts at a course, YouTube instructional videos, equipment specs and reviews, course reviews, instructor bios, rules clarifications, tournament results, or anything where up-to-date information would help the player. Always prefer a specific, targeted query (e.g. 'weather Elma Meadows New York this weekend' not just 'weather'). For YouTube videos include 'YouTube' in the query. For weather include the course name and city.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      query: { type: "string", description: "The search query. Be specific and include relevant context (location, course name, skill level, etc.)." },
+    },
+    required: ["query"],
+  },
+};
+
 // Course lookup tool — lets Frankie search for a course and discuss it in normal chat
 const lookupCourseTool: Anthropic.Tool = {
   name: "lookup_course",
@@ -1133,7 +1146,7 @@ export async function POST(req: NextRequest) {
       model: activeModel,
       max_tokens: 2048,
       system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-      tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+      tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
       messages: apiMessages,
     });
 
@@ -1182,7 +1195,7 @@ export async function POST(req: NextRequest) {
             model: activeModel,
             max_tokens: 512,
             system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-            tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+            tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
             tool_choice: { type: "none" },
             messages: [
               ...apiMessages,
@@ -1194,6 +1207,53 @@ export async function POST(req: NextRequest) {
             ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
             : "I noted that — what else can I help you with?";
         }
+
+      } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "search_web") {
+        const { query } = toolBlock.input as { query: string };
+        let searchResult = "No results found.";
+        try {
+          const tavilyKey = getEnvVar("TAVILY_API_KEY");
+          const res = await fetch("https://api.tavily.com/search", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              api_key: tavilyKey,
+              query,
+              search_depth: "basic",
+              max_results: 5,
+              include_answer: true,
+            }),
+          });
+          const data = await res.json();
+          const parts: string[] = [];
+          if (data.answer) parts.push(`Summary: ${data.answer}`);
+          if (data.results?.length) {
+            parts.push("Sources:");
+            for (const r of data.results.slice(0, 4)) {
+              parts.push(`- ${r.title}: ${r.content?.substring(0, 200) ?? ""} (${r.url})`);
+            }
+          }
+          searchResult = parts.join("\n") || "No results found.";
+        } catch (err) {
+          console.error("Tavily search error:", err);
+          searchResult = "Search failed — answer from your knowledge instead.";
+        }
+
+        const followUp = await anthropic.messages.create({
+          model: activeModel,
+          max_tokens: 1024,
+          system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tool_choice: { type: "none" },
+          messages: [
+            ...apiMessages,
+            { role: "assistant", content: response.content },
+            { role: "user", content: [{ type: "tool_result", tool_use_id: toolBlock.id, content: searchResult }] },
+          ],
+        });
+        reply = followUp.content.find((b) => b.type === "text")?.type === "text"
+          ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
+          : "";
 
       } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "lookup_course") {
         const input = toolBlock.input as { course_name: string };
@@ -1221,7 +1281,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 1024,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1272,7 +1332,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 512,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1307,7 +1367,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1348,7 +1408,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1391,7 +1451,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
