@@ -580,7 +580,7 @@ export default function ChatPage() {
   }
 
   const stateLabel: Record<AppState, string> = {
-    idle: handssFree ? "Listening for you…" : "Tap to speak",
+    idle: handssFree ? "Tap mic to start hands-free" : "Tap to speak",
     listening: handssFree ? "Hearing you… pause to send" : "Recording… tap to stop",
     transcribing: "Transcribing…",
     thinking: `${personaName} is thinking…`,
@@ -731,7 +731,7 @@ export default function ChatPage() {
             </button>
           ) : (
             <button
-              onClick={handssFree ? undefined : toggleListening}
+              onClick={handssFree ? (appState === "idle" ? startListening : stopListening) : toggleListening}
               disabled={appState === "thinking" || appState === "transcribing"}
               className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all ${
                 appState === "listening"
