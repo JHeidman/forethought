@@ -13,14 +13,13 @@ type Message = {
   content: string;
 };
 
-type AppState = "idle" | "listening" | "thinking" | "speaking";
+type AppState = "idle" | "listening" | "transcribing" | "thinking" | "speaking";
 
 export default function ChatPage() {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [appState, setAppState] = useState<AppState>("idle");
-  const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
   const [muted, setMuted] = useState(false);
   const [personaName, setPersonaName] = useState("Frankie");
@@ -33,10 +32,10 @@ export default function ChatPage() {
   const [pendingImage, setPendingImage] = useState<{ base64: string; mediaType: string } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const transcriptRef = useRef<string>("");
   const currentVoiceIdRef = useRef<string>("FGY2WhTYpPnrIDTdsKH5");
 
   // GPS + shot tracking refs (refs not state — updates don't need re-renders)
@@ -45,7 +44,7 @@ export default function ChatPage() {
   const lastShotRef = useRef<{ club: string; gps: { lat: number; lon: number } } | null>(null);
 
   const personaNameRef = useRef<string>("Frankie");
-  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sendMessageRef = useRef<(text: string) => Promise<void>>(async () => {});
 
   function buildChips(goal: string | null): string[] {
     const hour = new Date().getHours();
@@ -199,9 +198,6 @@ export default function ChatPage() {
         }
       }
 
-      if ("SpeechRecognition" in window || "webkitSpeechRecognition" in window) {
-        setVoiceSupported(true);
-      }
       if (window.innerWidth < 768) setVoiceMode(true);
     }
     init();
@@ -423,83 +419,65 @@ export default function ChatPage() {
     }
   }, [appState, pendingImage]);
 
-  function startListening() {
+  // Keep sendMessageRef in sync so voice callbacks always have the latest version
+  useEffect(() => { sendMessageRef.current = sendMessage; }, [sendMessage]);
+
+  async function startListening() {
     if (appState !== "idle") return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = window as any;
-    const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
-    if (!SR) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      audioChunksRef.current = [];
 
-    transcriptRef.current = "";
-    setInput("");
-    const recognition = new SR();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/mp4")
+        ? "audio/mp4"
+        : undefined;
 
-    recognition.onstart = () => setAppState("listening");
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    recognition.onresult = (event: any) => {
-      let final = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (event.results[i].isFinal) final += event.results[i][0].transcript;
-      }
-      if (final) transcriptRef.current += " " + final;
-      let interim = transcriptRef.current;
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (!event.results[i].isFinal) interim += event.results[i][0].transcript;
-      }
-      setInput(interim.trim());
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
 
-      // Safety: auto-stop after 60s to prevent runaway sessions
-      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-      inactivityTimerRef.current = setTimeout(() => stopListening(), 60000);
-    };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
 
-    recognition.onerror = (event: { error: string }) => {
-      // "no-speech" is normal on iOS — don't treat as failure
-      if (event.error !== "no-speech") {
-        recognitionRef.current = null;
-        setAppState("idle");
-      }
-    };
+        const blob = new Blob(audioChunksRef.current, { type: mimeType ?? "audio/webm" });
+        audioChunksRef.current = [];
 
-    recognition.onend = () => {
-      if (inactivityTimerRef.current) {
-        clearTimeout(inactivityTimerRef.current);
-        inactivityTimerRef.current = null;
-      }
-      // If recognitionRef is still set, iOS killed it on us (continuous isn't respected)
-      // Treat it as "done talking" — send whatever we captured
-      if (recognitionRef.current !== null) {
-        recognitionRef.current = null;
-        const transcript = transcriptRef.current.trim();
-        if (transcript) {
-          sendMessage(transcript);
-        } else {
+        if (blob.size < 500) { setAppState("idle"); return; }
+
+        setAppState("transcribing");
+        try {
+          const ext = (mimeType ?? "").includes("mp4") ? "mp4" : (mimeType ?? "").includes("ogg") ? "ogg" : "webm";
+          const form = new FormData();
+          form.append("audio", blob, `recording.${ext}`);
+          const res = await fetch("/api/transcribe", { method: "POST", body: form });
+          const data = await res.json();
+          if (data.text?.trim()) {
+            await sendMessageRef.current(data.text.trim());
+          } else {
+            setAppState("idle");
+          }
+        } catch {
           setAppState("idle");
         }
-      } else {
-        // User explicitly stopped via stopListening() — already handled there
-        setAppState("idle");
-      }
-    };
+      };
 
-    recognitionRef.current = recognition;
-    recognition.start();
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setAppState("listening");
+    } catch {
+      setAppState("idle");
+    }
   }
 
   function stopListening() {
-    if (inactivityTimerRef.current) {
-      clearTimeout(inactivityTimerRef.current);
-      inactivityTimerRef.current = null;
-    }
-    const transcript = transcriptRef.current.trim() || input.trim();
-    recognitionRef.current?.stop();
-    recognitionRef.current = null; // null before onend fires so onend knows user stopped
-    if (transcript) sendMessage(transcript);
-    else setAppState("idle");
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
   }
 
   function toggleListening() {
@@ -514,7 +492,8 @@ export default function ChatPage() {
 
   const stateLabel: Record<AppState, string> = {
     idle: "Tap to speak",
-    listening: "Listening… tap to send",
+    listening: "Recording… tap to stop",
+    transcribing: "Transcribing…",
     thinking: `${personaName} is thinking…`,
     speaking: `${personaName} is speaking…`,
   };
@@ -665,11 +644,11 @@ export default function ChatPage() {
           ) : (
             <button
               onClick={toggleListening}
-              disabled={appState === "thinking"}
+              disabled={appState === "thinking" || appState === "transcribing"}
               className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all ${
                 appState === "listening"
                   ? "bg-red-600 scale-110 ring-4 ring-red-400 ring-opacity-50"
-                  : appState === "thinking"
+                  : appState === "thinking" || appState === "transcribing"
                   ? "bg-gray-700 opacity-50 cursor-not-allowed"
                   : "bg-green-600 hover:bg-green-500 active:scale-95"
               }`}
@@ -728,15 +707,13 @@ export default function ChatPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
             </label>
-            {voiceSupported && (
-              <button type="button" onClick={toggleListening}
-                disabled={appState === "thinking" || appState === "speaking"}
+            <button type="button" onClick={toggleListening}
+                disabled={appState === "thinking" || appState === "speaking" || appState === "transcribing"}
                 className={`shrink-0 rounded-xl p-3 transition-colors disabled:opacity-40 ${appState === "listening" ? "bg-red-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                 </svg>
               </button>
-            )}
             <button type="submit" disabled={(!input.trim() && !pendingImage) || appState !== "idle"}
               className="shrink-0 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-40 px-4 py-3 text-white font-semibold transition-colors">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
