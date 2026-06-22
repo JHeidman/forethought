@@ -457,10 +457,33 @@ export default function ChatPage() {
       inactivityTimerRef.current = setTimeout(() => stopListening(), 60000);
     };
 
-    recognition.onerror = () => setAppState("idle");
+    recognition.onerror = (event: { error: string }) => {
+      // "no-speech" is normal on iOS — don't treat as failure
+      if (event.error !== "no-speech") {
+        recognitionRef.current = null;
+        setAppState("idle");
+      }
+    };
+
     recognition.onend = () => {
-      // Only fires if recognition stops on its own (e.g. error) — not from stopListening()
-      setAppState("idle");
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+      // If recognitionRef is still set, iOS killed it on us (continuous isn't respected)
+      // Treat it as "done talking" — send whatever we captured
+      if (recognitionRef.current !== null) {
+        recognitionRef.current = null;
+        const transcript = transcriptRef.current.trim();
+        if (transcript) {
+          sendMessage(transcript);
+        } else {
+          setAppState("idle");
+        }
+      } else {
+        // User explicitly stopped via stopListening() — already handled there
+        setAppState("idle");
+      }
     };
 
     recognitionRef.current = recognition;
@@ -472,9 +495,9 @@ export default function ChatPage() {
       clearTimeout(inactivityTimerRef.current);
       inactivityTimerRef.current = null;
     }
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
     const transcript = transcriptRef.current.trim() || input.trim();
+    recognitionRef.current?.stop();
+    recognitionRef.current = null; // null before onend fires so onend knows user stopped
     if (transcript) sendMessage(transcript);
     else setAppState("idle");
   }
