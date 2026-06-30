@@ -2,6 +2,49 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
+async function buildSupabase() {
+  const cookieStore = await cookies();
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll: () => cookieStore.getAll(),
+        setAll: (toSet) => {
+          try { toSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options)); } catch {}
+        },
+      },
+    }
+  );
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { club_name } = body;
+
+    if (!club_name) {
+      return NextResponse.json({ error: "club_name required" }, { status: 400 });
+    }
+
+    const supabase = await buildSupabase();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const { error } = await supabase
+      .from("clubs")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("club_name", club_name);
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("Clubs DELETE error:", err);
+    return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
+  }
+}
+
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
@@ -11,20 +54,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "club_name required" }, { status: 400 });
     }
 
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll: () => cookieStore.getAll(),
-          setAll: (toSet) => {
-            try { toSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options)); } catch {}
-          },
-        },
-      }
-    );
-
+    const supabase = await buildSupabase();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -57,6 +87,9 @@ export async function PATCH(req: NextRequest) {
     if (body.confidence !== undefined) update.confidence = body.confidence || null;
     if (body.typical_shape !== undefined) update.typical_shape = body.typical_shape || null;
     if (body.notes !== undefined) update.notes = body.notes || null;
+
+    // In-bag status
+    if (body.in_bag !== undefined) update.in_bag = body.in_bag;
 
     const { error } = await supabase
       .from("clubs")

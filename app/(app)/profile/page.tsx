@@ -31,6 +31,7 @@ type Club = {
   typical_shape: string | null;
   notes: string | null;
   specs_source: string | null;
+  in_bag: boolean | null;
 };
 
 type ClubEditState = {
@@ -77,6 +78,9 @@ export default function ProfilePage() {
     typical_shape: "",
     notes: "",
   });
+  const [deletingClub, setDeletingClub] = useState<string | null>(null); // club_name pending delete confirm
+  const [confirmingDelete, setConfirmingDelete] = useState(false); // API in-flight
+  const [togglingInBag, setTogglingInBag] = useState<string | null>(null); // club_name being toggled
   const [lookingUp, setLookingUp] = useState(false);
   const [lookupNote, setLookupNote] = useState<string | null>(null);
   const [savingClub, setSavingClub] = useState(false);
@@ -257,6 +261,35 @@ export default function ProfilePage() {
     setSavingClub(false);
   }
 
+  async function deleteClub(clubName: string) {
+    setConfirmingDelete(true);
+    const res = await fetch("/api/clubs", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ club_name: clubName }),
+    });
+    if (res.ok) {
+      setClubs(prev => prev.filter(c => c.club_name !== clubName));
+      setDeletingClub(null);
+      if (editingClub === clubName) setEditingClub(null);
+    }
+    setConfirmingDelete(false);
+  }
+
+  async function toggleInBag(clubName: string, current: boolean | null) {
+    setTogglingInBag(clubName);
+    const newVal = !current;
+    const res = await fetch("/api/clubs", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ club_name: clubName, in_bag: newVal }),
+    });
+    if (res.ok) {
+      setClubs(prev => prev.map(c => c.club_name === clubName ? { ...c, in_bag: newVal } : c));
+    }
+    setTogglingInBag(null);
+  }
+
   async function clearAiNotes() {
     setClearingAiNotes(true);
     const supabase = createClient();
@@ -384,43 +417,89 @@ export default function ProfilePage() {
               {clubs.map(c => (
                 <div key={c.club_name}>
                   {/* Club summary row */}
-                  <button
-                    onClick={() => editingClub === c.club_name ? setEditingClub(null) : openClubEdit(c)}
-                    className={`w-full flex items-center justify-between rounded-xl px-4 py-3 border transition-colors text-left ${
-                      editingClub === c.club_name
-                        ? "bg-gray-750 border-green-600"
-                        : "bg-gray-800 border-gray-700 hover:border-gray-600"
-                    }`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white text-sm font-medium">{c.club_name}</p>
-                      {c.brand && c.club_model && (
-                        <p className="text-xs text-gray-500 truncate">{c.brand} {c.club_model}</p>
-                      )}
-                      {!c.brand && c.default_basis && c.distance_source === "demographic_default" && (
-                        <p className="text-xs text-gray-600">{c.default_basis}</p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0 ml-2">
-                      {/* Confidence dots */}
-                      {c.confidence && c.confidence > 0 && (
-                        <div className="flex gap-0.5">
-                          {[1,2,3,4,5].map(n => (
-                            <div key={n} className={`w-1.5 h-1.5 rounded-full ${n <= c.confidence! ? "bg-green-500" : "bg-gray-700"}`} />
-                          ))}
-                        </div>
-                      )}
-                      {/* Shot shape badge */}
-                      {c.typical_shape && (
-                        <span className="text-xs text-gray-500 italic">{c.typical_shape.toLowerCase()}</span>
-                      )}
-                      <div className="text-right">
-                        <span className="text-white font-mono text-sm">{c.expected_distance}</span>
-                        <span className="text-gray-500 text-xs ml-1">yds</span>
+                  <div className={`flex items-center rounded-xl border transition-colors ${
+                    editingClub === c.club_name
+                      ? "bg-gray-750 border-green-600"
+                      : "bg-gray-800 border-gray-700"
+                  }`}>
+                    {/* In-bag toggle */}
+                    <button
+                      onClick={() => toggleInBag(c.club_name, c.in_bag)}
+                      disabled={togglingInBag === c.club_name}
+                      title={c.in_bag ? "Remove from bag" : "Add to bag"}
+                      className={`shrink-0 pl-3 pr-2 py-3 transition-colors disabled:opacity-40 ${
+                        c.in_bag ? "text-green-400" : "text-gray-600 hover:text-gray-400"
+                      }`}
+                    >
+                      {c.in_bag ? "🏌️" : "🛍️"}
+                    </button>
+
+                    {/* Main expand/collapse button */}
+                    <button
+                      onClick={() => editingClub === c.club_name ? setEditingClub(null) : openClubEdit(c)}
+                      className="flex-1 flex items-center justify-between px-2 py-3 text-left min-w-0"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white text-sm font-medium">{c.club_name}</p>
+                        {c.brand && c.club_model && (
+                          <p className="text-xs text-gray-500 truncate">{c.brand} {c.club_model}</p>
+                        )}
+                        {!c.brand && c.default_basis && c.distance_source === "demographic_default" && (
+                          <p className="text-xs text-gray-600">{c.default_basis}</p>
+                        )}
                       </div>
-                      <span className="text-gray-600 text-xs">{editingClub === c.club_name ? "▲" : "▼"}</span>
+                      <div className="flex items-center gap-3 shrink-0 ml-2">
+                        {/* Confidence dots */}
+                        {c.confidence && c.confidence > 0 && (
+                          <div className="flex gap-0.5">
+                            {[1,2,3,4,5].map(n => (
+                              <div key={n} className={`w-1.5 h-1.5 rounded-full ${n <= c.confidence! ? "bg-green-500" : "bg-gray-700"}`} />
+                            ))}
+                          </div>
+                        )}
+                        {/* Shot shape badge */}
+                        {c.typical_shape && (
+                          <span className="text-xs text-gray-500 italic">{c.typical_shape.toLowerCase()}</span>
+                        )}
+                        <div className="text-right">
+                          <span className="text-white font-mono text-sm">{c.expected_distance}</span>
+                          <span className="text-gray-500 text-xs ml-1">yds</span>
+                        </div>
+                        <span className="text-gray-600 text-xs">{editingClub === c.club_name ? "▲" : "▼"}</span>
+                      </div>
+                    </button>
+
+                    {/* Delete button */}
+                    <button
+                      onClick={() => setDeletingClub(c.club_name)}
+                      title="Delete club"
+                      className="shrink-0 px-3 py-3 text-gray-600 hover:text-red-400 transition-colors text-sm"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Delete confirm inline */}
+                  {deletingClub === c.club_name && (
+                    <div className="bg-gray-900 rounded-xl border border-red-800 mt-1 px-4 py-3 flex items-center justify-between gap-3">
+                      <p className="text-sm text-gray-300">Delete <span className="text-white font-medium">{c.club_name}</span>? This can&apos;t be undone.</p>
+                      <div className="flex gap-2 shrink-0">
+                        <button
+                          onClick={() => setDeletingClub(null)}
+                          className="px-3 py-1.5 rounded-lg border border-gray-700 text-gray-400 text-xs hover:border-gray-600 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => deleteClub(c.club_name)}
+                          disabled={confirmingDelete}
+                          className="px-3 py-1.5 rounded-lg bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-xs font-medium transition-colors"
+                        >
+                          {confirmingDelete ? "Deleting…" : "Delete"}
+                        </button>
+                      </div>
                     </div>
-                  </button>
+                  )}
 
                   {/* Expanded editor */}
                   {editingClub === c.club_name && (

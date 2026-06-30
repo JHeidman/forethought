@@ -20,6 +20,7 @@ export default function PlansPage() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [seasonPlanExpanded, setSeasonPlanExpanded] = useState(true);
 
   useEffect(() => {
@@ -133,16 +134,45 @@ export default function PlansPage() {
             <p className="text-xs text-gray-500 uppercase tracking-wide mb-3">Practice Sessions</p>
             <div className="space-y-3">
               {plans.map((plan) => (
-                <div key={plan.id} className="bg-gray-800 rounded-2xl overflow-hidden border border-gray-700">
+                <div key={plan.id} className="bg-gray-800 rounded-2xl overflow-hidden border border-gray-700 relative">
+                  {/* Delete button — top-right corner */}
+                  <div className="absolute top-3 right-3 z-10">
+                    {confirmDelete === plan.id ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => { deletePlan(plan.id); setConfirmDelete(null); }}
+                          disabled={deleting === plan.id}
+                          className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 px-1.5 py-0.5 rounded bg-gray-700"
+                        >
+                          {deleting === plan.id ? "…" : "Delete"}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(null)}
+                          className="text-xs text-gray-500 hover:text-gray-300 px-1.5 py-0.5 rounded bg-gray-700"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setConfirmDelete(plan.id); }}
+                        className="text-gray-600 hover:text-red-400 transition-colors text-base leading-none p-1"
+                        aria-label="Delete plan"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
                   <button
-                    className="w-full text-left px-4 py-4 flex items-center justify-between"
-                    onClick={() => setExpanded(expanded === plan.id ? null : plan.id)}
+                    className="w-full text-left px-4 py-4 pr-16 flex items-center justify-between"
+                    onClick={() => { setConfirmDelete(null); setExpanded(expanded === plan.id ? null : plan.id); }}
                   >
                     <div>
                       <p className="font-medium text-white">{plan.title}</p>
                       <p className="text-xs text-gray-500 mt-0.5">{formatDate(plan.created_at)}</p>
                     </div>
-                    <span className="text-gray-500 text-lg">{expanded === plan.id ? "▲" : "▼"}</span>
+                    <span className="text-gray-500 text-lg mr-6">{expanded === plan.id ? "▲" : "▼"}</span>
                   </button>
 
                   {expanded === plan.id && (
@@ -150,13 +180,6 @@ export default function PlansPage() {
                       <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap mt-3">
                         {plan.content}
                       </p>
-                      <button
-                        onClick={() => deletePlan(plan.id)}
-                        disabled={deleting === plan.id}
-                        className="mt-4 text-xs text-red-400 hover:text-red-300 disabled:opacity-50"
-                      >
-                        {deleting === plan.id ? "Deleting…" : "Delete plan"}
-                      </button>
                     </div>
                   )}
                 </div>
