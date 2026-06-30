@@ -39,6 +39,8 @@ export default function ChatPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentVoiceIdRef = useRef<string>("FGY2WhTYpPnrIDTdsKH5");
+  const currentPersonaRef = useRef<string>("frankie");
+  const voiceTierRef = useRef<string>("premium");
 
   // GPS + shot tracking refs (refs not state — updates don't need re-renders)
   const gpsWatchIdRef = useRef<number | null>(null);
@@ -136,6 +138,8 @@ export default function ChatPage() {
         };
         setPersonaName(PERSONA_NAMES[profile.persona] ?? "Frankie");
         currentVoiceIdRef.current = PERSONA_VOICES[profile.persona] ?? "FGY2WhTYpPnrIDTdsKH5";
+        currentPersonaRef.current = profile.persona ?? "frankie";
+        voiceTierRef.current = (profile as Record<string, unknown>).voice_tier as string ?? "premium";
       }
 
       const goal = profile?.goal ?? null;
@@ -172,6 +176,8 @@ export default function ChatPage() {
               if (data.reply) {
                 if (data.personaName) setPersonaName(data.personaName);
                 if (data.voiceId) currentVoiceIdRef.current = data.voiceId;
+                if (data.persona) currentPersonaRef.current = data.persona;
+                if (data.voiceTier) voiceTierRef.current = data.voiceTier;
                 const msg = { id: crypto.randomUUID(), role: "assistant" as const, content: data.reply };
                 setMessages(prev => [...prev, msg]);
                 await speakText(data.speech || data.reply, data.voiceId);
@@ -321,7 +327,7 @@ export default function ChatPage() {
       const res = await fetch("/api/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, voiceId: voiceId || currentVoiceIdRef.current }),
+        body: JSON.stringify({ text, voiceId: voiceId || currentVoiceIdRef.current, tier: voiceTierRef.current, persona: currentPersonaRef.current }),
       });
 
       if (!res.ok) { setAppState("idle"); return; }

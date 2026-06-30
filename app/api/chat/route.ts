@@ -1563,6 +1563,8 @@ export async function POST(req: NextRequest) {
       speech,
       voiceId: persona.voiceId,
       personaName: persona.name,
+      persona: profile.persona || "frankie",
+      voiceTier: (profile as Record<string, unknown>).voice_tier as string ?? "premium",
       planSaved,
       seasonPlanSaved,
     });
