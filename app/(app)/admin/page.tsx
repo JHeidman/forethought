@@ -29,7 +29,7 @@ type UserStat = {
 
 export default function AdminPage() {
   const router = useRouter();
-  const [tab, setTab] = useState<"users" | "prompt" | "codes" | "news" | "feedback">("users");
+  const [tab, setTab] = useState<"users" | "prompt" | "codes" | "news" | "feedback" | "health">("users");
   const [unauthorized, setUnauthorized] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -62,6 +62,12 @@ export default function AdminPage() {
   type FeedbackItem = { id: string; type: "persona_gap" | "user_suggestion"; description: string; user_message: string; created_at: string; user_id: string; userName?: string };
   const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
+
+  // Health tab
+  type ServiceStatus = { name: string; ok: boolean; detail: string };
+  type HealthData = { services: Record<string, ServiceStatus>; checkedAt: string };
+  const [health, setHealth] = useState<HealthData | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
 
   useEffect(() => {
     async function init() {
@@ -146,6 +152,16 @@ export default function AdminPage() {
     setFeedback(prev => prev.filter(f => f.id !== id));
   }
 
+  async function loadHealth() {
+    setHealthLoading(true);
+    const supabase = createClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    const res = await fetch("/api/admin/health", { headers: { Authorization: `Bearer ${token}` } });
+    if (res.ok) setHealth(await res.json());
+    setHealthLoading(false);
+  }
+
   async function loadAnnouncements() {
     setNewsLoading(true);
     const supabase = createClient();
@@ -213,7 +229,7 @@ export default function AdminPage() {
 
       {/* Tabs */}
       <div className="flex border-b border-gray-800 shrink-0">
-        {([["users", "👥 Users"], ["prompt", "✏️ Prompt"], ["codes", "🔑 Codes"], ["news", "📢 News"], ["feedback", "💬 Feedback"]] as [typeof tab, string][]).map(([key, label]) => (
+        {([["users", "👥 Users"], ["prompt", "✏️ Prompt"], ["codes", "🔑 Codes"], ["news", "📢 News"], ["feedback", "💬 Feedback"], ["health", "🩺 Health"]] as [typeof tab, string][]).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)}
             className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${tab === key ? "border-green-500 text-green-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>
             {label}
@@ -502,6 +518,45 @@ export default function AdminPage() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Health Tab */}
+        {tab === "health" && (
+          <div className="p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-gray-600">Live status of all external APIs</p>
+              <button onClick={loadHealth} disabled={healthLoading} className="text-xs text-gray-500 hover:text-gray-300">
+                {healthLoading ? "Checking…" : "↻ Check now"}
+              </button>
+            </div>
+
+            {!health && !healthLoading && (
+              <button onClick={loadHealth} className="w-full py-8 rounded-xl border border-dashed border-gray-700 text-gray-500 text-sm hover:border-gray-500 hover:text-gray-300 transition-colors">
+                Tap to check API health
+              </button>
+            )}
+
+            {healthLoading && (
+              <p className="text-gray-500 text-sm text-center py-8">Checking services…</p>
+            )}
+
+            {health && (
+              <>
+                <div className="space-y-3">
+                  {Object.values(health.services).map((svc) => (
+                    <div key={svc.name} className={`rounded-xl p-4 border flex items-start gap-3 ${svc.ok ? "bg-green-950 border-green-800" : "bg-red-950 border-red-800"}`}>
+                      <span className="text-xl">{svc.ok ? "✅" : "🔴"}</span>
+                      <div className="min-w-0">
+                        <p className="text-white text-sm font-medium">{svc.name}</p>
+                        <p className={`text-xs mt-0.5 ${svc.ok ? "text-green-400" : "text-red-400"}`}>{svc.detail}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-600 text-center">Checked {new Date(health.checkedAt).toLocaleTimeString()}</p>
+              </>
+            )}
           </div>
         )}
 
