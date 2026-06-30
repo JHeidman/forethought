@@ -86,6 +86,13 @@ export default function ProfilePage() {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Password change
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSaved, setPasswordSaved] = useState(false);
+
   type Announcement = { id: string; version: string; title: string; summary: string; detail: string; created_at: string };
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [newsOpen, setNewsOpen] = useState(false);
@@ -264,6 +271,22 @@ export default function ProfilePage() {
     const supabase = createClient();
     await supabase.auth.signOut();
     router.push("/login");
+  }
+
+  async function handlePasswordChange(e: React.FormEvent) {
+    e.preventDefault();
+    setPasswordError("");
+    if (newPassword.length < 8) { setPasswordError("Password must be at least 8 characters."); return; }
+    if (newPassword !== confirmPassword) { setPasswordError("Passwords don't match."); return; }
+    setPasswordSaving(true);
+    const supabase = createClient();
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    setPasswordSaving(false);
+    if (error) { setPasswordError(error.message); return; }
+    setPasswordSaved(true);
+    setNewPassword("");
+    setConfirmPassword("");
+    setTimeout(() => setPasswordSaved(false), 3000);
   }
 
   if (loading) return <div className="min-h-full flex items-center justify-center"><p className="text-gray-400">Loading…</p></div>;
@@ -678,6 +701,42 @@ export default function ProfilePage() {
               ))}
             </div>
           )}
+        </div>
+
+        {/* Change Password */}
+        <div className="border-t border-gray-800 pt-6">
+          <p className="text-xs text-gray-500 uppercase tracking-wide mb-4">Account</p>
+          <form onSubmit={handlePasswordChange} className="space-y-3">
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">New Password</label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-base focus:outline-none focus:border-green-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Confirm Password</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Repeat new password"
+                className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-base focus:outline-none focus:border-green-500"
+              />
+            </div>
+            {passwordError && <p className="text-red-400 text-sm">{passwordError}</p>}
+            {passwordSaved && <p className="text-green-400 text-sm">Password updated!</p>}
+            <button
+              type="submit"
+              disabled={passwordSaving || !newPassword}
+              className="w-full rounded-xl bg-gray-700 hover:bg-gray-600 disabled:opacity-40 px-4 py-3 text-white font-medium text-base transition-colors"
+            >
+              {passwordSaving ? "Saving…" : "Change Password"}
+            </button>
+          </form>
         </div>
 
         <button type="button" onClick={handleSignOut}
