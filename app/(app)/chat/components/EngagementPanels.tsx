@@ -45,11 +45,12 @@ export default function EngagementPanels({ onSelect }: Props) {
         What are we working on today?
       </p>
       <div className="grid grid-cols-2 gap-3">
-        {PANELS.map((panel) => (
+        {PANELS.map((panel, i) => (
           <button
-            key={panel.title}
+            key={i}
             onClick={() => onSelect(panel.prompt)}
-            className="flex flex-col items-start gap-1 rounded-2xl bg-gray-800 border border-gray-700 p-4 text-left transition-all active:scale-95 hover:border-green-600 hover:bg-gray-750 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+            aria-label={panel.title}
+            className="flex flex-col items-start gap-1 rounded-2xl bg-gray-800 border border-gray-700 p-4 text-left transition-all active:scale-95 hover:border-green-600 hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
           >
             <span className="text-2xl">{panel.emoji}</span>
             <span className="text-sm font-semibold text-white leading-tight">
