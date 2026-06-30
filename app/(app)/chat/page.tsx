@@ -32,7 +32,6 @@ export default function ChatPage() {
   const [pendingImage, setPendingImage] = useState<{ base64: string; mediaType: string } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
-  const [handssFree, setHandsFree] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -49,7 +48,7 @@ export default function ChatPage() {
 
   const personaNameRef = useRef<string>("Frankie");
   const sendMessageRef = useRef<(text: string) => Promise<void>>(async () => {});
-  const handsFreeRef = useRef(false);
+  const voiceModeRef = useRef(false);
   const prevAppStateRef = useRef<AppState>("idle");
   const silenceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -249,19 +248,19 @@ export default function ChatPage() {
 
   // Keep refs in sync
   useEffect(() => { personaNameRef.current = personaName; }, [personaName]);
-  useEffect(() => { handsFreeRef.current = handssFree; }, [handssFree]);
+  useEffect(() => { voiceModeRef.current = voiceMode; }, [voiceMode]);
 
-  // Hands-free auto-restart: after Frankie finishes speaking (or thinking if muted), listen again
+  // Auto-listen: when voice mode is on and Frankie finishes speaking, start listening again
   useEffect(() => {
     const prev = prevAppStateRef.current;
     prevAppStateRef.current = appState;
 
-    if (!handsFreeRef.current) return;
+    if (!voiceModeRef.current) return;
     if (appState !== "idle") return;
     if (prev !== "speaking" && prev !== "thinking") return;
 
     const t = setTimeout(() => {
-      if (handsFreeRef.current) void startListeningInternal();
+      if (voiceModeRef.current) void startListeningInternal();
     }, 600);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -521,43 +520,41 @@ export default function ChatPage() {
       }
     };
 
-    // Silence detection — only in hands-free mode
-    if (handsFreeRef.current) {
-      try {
-        const ctx = new AudioContext();
-        audioContextRef.current = ctx;
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 512;
-        ctx.createMediaStreamSource(stream).connect(analyser);
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    // Silence detection — auto-stop when user pauses speaking
+    try {
+      const ctx = new AudioContext();
+      audioContextRef.current = ctx;
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-        const THRESHOLD = 22;       // 0-255 volume level — below this is silence
-        const SILENCE_MS = 1800;    // stop after this much silence
-        const MIN_SPEECH_MS = 600;  // don't stop until user has spoken at least this long
-        let hasSpeech = false;
-        let silenceStart: number | null = null;
-        const speechStart = Date.now();
+      const THRESHOLD = 22;       // 0-255 volume level — below this is silence
+      const SILENCE_MS = 1800;    // stop after this much silence
+      const MIN_SPEECH_MS = 600;  // don't stop until user has spoken at least this long
+      let hasSpeech = false;
+      let silenceStart: number | null = null;
+      const speechStart = Date.now();
 
-        silenceIntervalRef.current = setInterval(() => {
-          analyser.getByteFrequencyData(dataArray);
-          const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+      silenceIntervalRef.current = setInterval(() => {
+        analyser.getByteFrequencyData(dataArray);
+        const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
 
-          if (avg > THRESHOLD) {
-            hasSpeech = true;
-            silenceStart = null;
-          } else if (hasSpeech && Date.now() - speechStart > MIN_SPEECH_MS) {
-            if (!silenceStart) silenceStart = Date.now();
-            else if (Date.now() - silenceStart > SILENCE_MS) {
-              clearInterval(silenceIntervalRef.current!);
-              silenceIntervalRef.current = null;
-              mediaRecorderRef.current?.stop();
-              mediaRecorderRef.current = null;
-            }
+        if (avg > THRESHOLD) {
+          hasSpeech = true;
+          silenceStart = null;
+        } else if (hasSpeech && Date.now() - speechStart > MIN_SPEECH_MS) {
+          if (!silenceStart) silenceStart = Date.now();
+          else if (Date.now() - silenceStart > SILENCE_MS) {
+            clearInterval(silenceIntervalRef.current!);
+            silenceIntervalRef.current = null;
+            mediaRecorderRef.current?.stop();
+            mediaRecorderRef.current = null;
           }
-        }, 100);
-      } catch {
-        // AudioContext failed — still record normally, just without auto-stop
-      }
+        }
+      }, 100);
+    } catch {
+      // AudioContext failed — still record normally, just without auto-stop
     }
 
     mediaRecorderRef.current = recorder;
@@ -588,8 +585,8 @@ export default function ChatPage() {
   }
 
   const stateLabel: Record<AppState, string> = {
-    idle: handssFree ? "Tap mic to start hands-free" : "Tap to speak",
-    listening: handssFree ? "Hearing you… pause to send" : "Recording… tap to stop",
+    idle: voiceMode ? "Listening… tap to speak" : "Tap to speak",
+    listening: "Listening… pause to send",
     transcribing: "Transcribing…",
     thinking: `${personaName} is thinking…`,
     speaking: `${personaName} is speaking…`,
@@ -739,13 +736,11 @@ export default function ChatPage() {
             </button>
           ) : (
             <button
-              onClick={handssFree ? (appState === "idle" ? startListening : stopListening) : toggleListening}
+              onClick={appState === "idle" ? startListening : stopListening}
               disabled={appState === "thinking" || appState === "transcribing"}
               className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all ${
                 appState === "listening"
-                  ? handssFree
-                    ? "bg-green-600 ring-4 ring-green-400 ring-opacity-60 scale-110 animate-pulse"
-                    : "bg-red-600 scale-110 ring-4 ring-red-400 ring-opacity-50"
+                  ? "bg-green-600 ring-4 ring-green-400 ring-opacity-60 scale-110 animate-pulse"
                   : appState === "thinking" || appState === "transcribing"
                   ? "bg-gray-700 opacity-50 cursor-not-allowed"
                   : "bg-green-600 hover:bg-green-500 active:scale-95"
@@ -757,23 +752,6 @@ export default function ChatPage() {
             </button>
           )}
 
-          {/* Hands-free toggle */}
-          <button
-            onClick={() => {
-              const next = !handssFree;
-              setHandsFree(next);
-              if (!next) stopListening(); // stop if turning off mid-session
-            }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs border transition-colors ${
-              handssFree
-                ? "border-green-500 text-green-400 bg-green-950"
-                : "border-gray-700 text-gray-500 hover:border-gray-500"
-            }`}
-          >
-            <span>{handssFree ? "🎙 Hands-free on" : "🎙 Hands-free off"}</span>
-          </button>
-
-          <button onClick={() => { setHandsFree(false); setVoiceMode(false); }} className="text-xs text-gray-600 hover:text-gray-400">Switch to text</button>
         </div>
       ) : (
         /* Text Mode */
