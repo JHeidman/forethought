@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import CourseMode from "@/components/CourseMode";
 import { haversineYards } from "@/lib/gps";
 import { detectShotAnnouncement } from "@/lib/shot-detection";
+import EngagementPanels from "./components/EngagementPanels";
 
 type Message = {
   id: string;
@@ -503,6 +504,11 @@ export default function ChatPage() {
   // Keep sendMessageRef in sync so voice callbacks always have the latest version
   useEffect(() => { sendMessageRef.current = sendMessage; }, [sendMessage]);
 
+  function handlePanelSelect(prompt: string) {
+    setInput(prompt);
+    void sendMessage(prompt);
+  }
+
   function stopSilenceDetection() {
     if (silenceIntervalRef.current) { clearInterval(silenceIntervalRef.current); silenceIntervalRef.current = null; }
     if (audioContextRef.current) { audioContextRef.current.close().catch(() => {}); audioContextRef.current = null; }
@@ -768,6 +774,11 @@ export default function ChatPage() {
             </div>
           </div>
         ))}
+
+        {/* Engagement panels — only on first load, disappear after first message */}
+        {messages.length === 0 && appState === "idle" && (
+          <EngagementPanels onSelect={handlePanelSelect} />
+        )}
 
         {/* Suggestion chips — shown every session, hidden once user sends anything */}
         {showSuggestions && appState === "idle" && suggestionChips.length > 0 && (
