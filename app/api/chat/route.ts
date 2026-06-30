@@ -1542,7 +1542,7 @@ export async function POST(req: NextRequest) {
     const newMessageCount = messageCount + 2;
     const isHighSignal = /\b(remember|breakthrough|figured out|finally|clicking|nailed it|shot \d+|broke \d+|best round|worst round|discovered|realized)\b/i.test(message ?? "");
     if (!isGreeting && (newMessageCount % 4 === 0 || isHighSignal)) {
-      await updateAiNotes(
+      void updateAiNotes(
         user.id,
         anthropic,
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
