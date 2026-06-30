@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 interface Panel {
   emoji: string;
   title: string;
@@ -39,18 +41,31 @@ interface Props {
 }
 
 export default function EngagementPanels({ onSelect }: Props) {
+  const [dismissing, setDismissing] = useState(false);
+
+  function handleClick(prompt: string) {
+    setDismissing(true);
+    // Small delay so the dismiss animation plays before the panels unmount
+    setTimeout(() => onSelect(prompt), 200);
+  }
+
   return (
-    <div className="px-4 pb-4">
-      <p className="text-center text-sm text-gray-400 mb-3">
+    <div
+      className={`px-4 pb-4 transition-all duration-200 ${
+        dismissing ? "opacity-0 scale-95" : "opacity-100 scale-100"
+      }`}
+    >
+      <p className="text-center text-sm text-gray-400 mb-3 animate-fade-in-up">
         What are we working on today?
       </p>
       <div className="grid grid-cols-2 gap-3">
         {PANELS.map((panel, i) => (
           <button
-            key={i}
-            onClick={() => onSelect(panel.prompt)}
+            key={panel.title}
+            onClick={() => handleClick(panel.prompt)}
             aria-label={panel.title}
-            className="flex flex-col items-start gap-1 rounded-2xl bg-gray-800 border border-gray-700 p-4 text-left transition-all active:scale-95 hover:border-green-600 hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+            style={{ animationDelay: `${i * 60}ms` }}
+            className="animate-fade-in-up flex flex-col items-start gap-1 rounded-2xl bg-gray-800 border border-gray-700 p-4 text-left transition-all active:scale-95 hover:border-green-600 hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
           >
             <span className="text-2xl">{panel.emoji}</span>
             <span className="text-sm font-semibold text-white leading-tight">
