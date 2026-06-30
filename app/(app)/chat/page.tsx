@@ -317,30 +317,68 @@ export default function ChatPage() {
     }
   }
 
-  async function speakText(text: string, voiceId?: string) {
-    if (muted) return;
-    try {
-      if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-      setAppState("speaking");
+  function splitSentences(text: string): string[] {
+    const raw = text.replace(/\n+/g, " ").match(/[^.!?]+[.!?]+/g) ?? [text];
+    return raw.map(s => s.trim()).filter(s => s.length > 2).slice(0, 4);
+  }
 
+  async function fetchAudioUrl(text: string, voiceId?: string): Promise<string | null> {
+    try {
       const res = await fetch("/api/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, voiceId: voiceId || currentVoiceIdRef.current, tier: voiceTierRef.current, persona: currentPersonaRef.current }),
+        body: JSON.stringify({
+          text,
+          voiceId: voiceId || currentVoiceIdRef.current,
+          tier: voiceTierRef.current,
+          persona: currentPersonaRef.current,
+        }),
       });
-
-      if (!res.ok) { setAppState("idle"); return; }
-
+      if (!res.ok) return null;
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
+      return URL.createObjectURL(blob);
+    } catch {
+      return null;
+    }
+  }
+
+  function playAudioUrl(url: string): Promise<void> {
+    return new Promise((resolve) => {
       const audio = new Audio(url);
       audioRef.current = audio;
+      audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; resolve(); };
+      audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; resolve(); };
+      audio.play().catch(() => resolve());
+    });
+  }
 
-      await new Promise<void>((resolve) => {
-        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.play().catch(() => resolve());
-      });
+  async function speakText(text: string, voiceId?: string) {
+    if (muted) return;
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    setAppState("speaking");
+
+    try {
+      const sentences = splitSentences(text);
+      if (sentences.length === 0) { setAppState("idle"); return; }
+
+      // Prefetch first sentence immediately
+      let nextFetch: Promise<string | null> = fetchAudioUrl(sentences[0], voiceId);
+
+      for (let i = 0; i < sentences.length; i++) {
+        const url = await nextFetch;
+
+        // Start prefetching the next sentence while current plays
+        if (i + 1 < sentences.length) {
+          nextFetch = fetchAudioUrl(sentences[i + 1], voiceId);
+        }
+
+        if (!url) continue;
+
+        // Stop if user muted mid-speech
+        if (muted) { URL.revokeObjectURL(url); break; }
+
+        await playAudioUrl(url);
+      }
     } catch {
       // Silently fail — text is still shown
     } finally {
