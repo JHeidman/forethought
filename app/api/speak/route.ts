@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
 
     const apiKey = getEnvVar("ELEVENLABS_API_KEY");
     if (!apiKey) {
-      return NextResponse.json({ error: "ElevenLabs API key not configured" }, { status: 500 });
+      return NextResponse.json({ error: "ElevenLabs API key not configured", keyLength: 0 }, { status: 500 });
     }
 
     const response = await fetch(
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     if (!response.ok) {
       const err = await response.text();
       console.error("ElevenLabs error:", err);
-      return NextResponse.json({ error: "TTS failed" }, { status: 500 });
+      return NextResponse.json({ error: "TTS failed", detail: err, status: response.status }, { status: 500 });
     }
 
     // Stream the audio back to the client
