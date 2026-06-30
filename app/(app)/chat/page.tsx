@@ -49,6 +49,9 @@ export default function ChatPage() {
   const personaNameRef = useRef<string>("Frankie");
   const sendMessageRef = useRef<(text: string) => Promise<void>>(async () => {});
   const voiceModeRef = useRef(false);
+  const [holdMode, setHoldMode] = useState(false);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdActiveRef = useRef(false);
   const prevAppStateRef = useRef<AppState>("idle");
   const silenceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -622,9 +625,45 @@ export default function ChatPage() {
     setAppState("idle");
   }
 
+  function handleMicPointerDown() {
+    if (appState === "thinking" || appState === "transcribing") return;
+    if (appState === "speaking") { stopSpeaking(); return; }
+    holdTimerRef.current = setTimeout(() => {
+      holdActiveRef.current = true;
+      setHoldMode(true);
+      if (appState === "idle") void startListeningInternal();
+    }, 200);
+  }
+
+  function handleMicPointerUp() {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    if (holdActiveRef.current) {
+      holdActiveRef.current = false;
+      setHoldMode(false);
+      stopListening();
+    } else {
+      toggleListening();
+    }
+  }
+
+  function handleMicPointerLeave() {
+    if (holdActiveRef.current) {
+      holdActiveRef.current = false;
+      setHoldMode(false);
+      stopListening();
+    }
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+  }
+
   const stateLabel: Record<AppState, string> = {
-    idle: voiceMode ? "Listening… tap to speak" : "Tap to speak",
-    listening: "Listening… pause to send",
+    idle: holdMode ? "Hold mic to speak" : (voiceMode ? "Listening… tap to speak" : "Tap to speak"),
+    listening: holdMode ? "Release to send" : "Listening… pause to send",
     transcribing: "Transcribing…",
     thinking: `${personaName} is thinking…`,
     speaking: `${personaName} is speaking…`,
@@ -774,7 +813,10 @@ export default function ChatPage() {
             </button>
           ) : (
             <button
-              onClick={appState === "idle" ? startListening : stopListening}
+              onPointerDown={handleMicPointerDown}
+              onPointerUp={handleMicPointerUp}
+              onPointerLeave={handleMicPointerLeave}
+              onContextMenu={(e) => e.preventDefault()}
               disabled={appState === "thinking" || appState === "transcribing"}
               className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all ${
                 appState === "listening"
