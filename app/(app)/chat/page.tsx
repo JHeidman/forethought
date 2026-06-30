@@ -37,6 +37,7 @@ export default function ChatPage() {
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const currentAudioUrlRef = useRef<string | null>(null);
   const currentVoiceIdRef = useRef<string>("FGY2WhTYpPnrIDTdsKH5");
   const currentPersonaRef = useRef<string>("frankie");
   const voiceTierRef = useRef<string>("premium");
@@ -349,8 +350,9 @@ export default function ChatPage() {
     return new Promise((resolve) => {
       const audio = new Audio(url);
       audioRef.current = audio;
-      audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; resolve(); };
-      audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; resolve(); };
+      currentAudioUrlRef.current = url;
+      audio.onended = () => { URL.revokeObjectURL(url); currentAudioUrlRef.current = null; audioRef.current = null; resolve(); };
+      audio.onerror = () => { URL.revokeObjectURL(url); currentAudioUrlRef.current = null; audioRef.current = null; resolve(); };
       audio.play().catch(() => resolve());
     });
   }
@@ -360,19 +362,24 @@ export default function ChatPage() {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     setAppState("speaking");
 
+    let pendingPrefetch: Promise<string | null> | null = null;
+
     try {
       const sentences = splitSentences(text);
       if (sentences.length === 0) { setAppState("idle"); return; }
 
       // Prefetch first sentence immediately
       let nextFetch: Promise<string | null> = fetchAudioUrl(sentences[0], voiceId);
+      pendingPrefetch = nextFetch;
 
       for (let i = 0; i < sentences.length; i++) {
         const url = await nextFetch;
+        pendingPrefetch = null;
 
         // Start prefetching the next sentence while current plays
         if (i + 1 < sentences.length) {
           nextFetch = fetchAudioUrl(sentences[i + 1], voiceId);
+          pendingPrefetch = nextFetch;
         }
 
         if (!url) continue;
@@ -385,6 +392,11 @@ export default function ChatPage() {
     } catch {
       // Silently fail — text is still shown
     } finally {
+      // Revoke any prefetched-but-unplayed audio
+      if (pendingPrefetch) {
+        const url = await pendingPrefetch.catch(() => null);
+        if (url) URL.revokeObjectURL(url);
+      }
       setAppState("idle");
     }
   }
@@ -622,6 +634,10 @@ export default function ChatPage() {
 
   function stopSpeaking() {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
+    }
     setAppState("idle");
   }
 
