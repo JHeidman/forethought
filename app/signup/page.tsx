@@ -51,7 +51,10 @@ function SignupForm() {
     const { error } = await supabase.auth.signUp({
       email,
       password,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+      options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        data: { invite_code: inviteCode.trim().toUpperCase(), invite_source: codeData.source ?? null },
+      },
     });
 
     if (error) { setError(error.message); setLoading(false); }
@@ -121,6 +124,12 @@ function SignupForm() {
             Already have an account?{" "}
             <Link href="/login" className="text-green-400 hover:underline">Sign in</Link>
           </p>
+          {!codeFromUrl && (
+            <p className="text-center text-sm text-gray-500">
+              No invite code?{" "}
+              <Link href="/#invite" className="text-green-400 hover:underline">Request one</Link>
+            </p>
+          )}
         </form>
       </div>
     </div>

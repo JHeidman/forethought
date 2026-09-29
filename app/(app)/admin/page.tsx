@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import type { InviteCode } from "@/lib/invites";
 
 const ADMIN_EMAIL = "jh.berkut@gmail.com";
 
@@ -29,7 +30,7 @@ type UserStat = {
 
 export default function AdminPage() {
   const router = useRouter();
-  const [tab, setTab] = useState<"users" | "prompt" | "codes" | "news" | "feedback" | "health">("users");
+  const [tab, setTab] = useState<"users" | "requests" | "prompt" | "codes" | "news" | "feedback" | "health">("users");
   const [unauthorized, setUnauthorized] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -44,8 +45,14 @@ export default function AdminPage() {
   const [saved, setSaved] = useState(false);
 
   // Codes tab
-  type InviteCode = { code: string; expiresAt?: string | null };
   const [codes, setCodes] = useState<InviteCode[]>([]);
+
+  // Requests tab
+  type InviteRequest = { id: string; email: string; handicap_range: string | null; wants: string | null; source: string | null; status: "pending" | "approved" | "declined"; invite_code: string | null; created_at: string };
+  const [requests, setRequests] = useState<InviteRequest[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
+  const [requestBusy, setRequestBusy] = useState<string | null>(null);
+  const [copiedRequest, setCopiedRequest] = useState<string | null>(null);
   const [newCode, setNewCode] = useState("");
   const [newExpiry, setNewExpiry] = useState("");
 
@@ -90,9 +97,64 @@ export default function AdminPage() {
       loadUsers();
       loadAnnouncements();
       loadFeedback();
+      loadRequests();
     }
     init();
   }, []);
+
+  async function loadRequests() {
+    setRequestsLoading(true);
+    const res = await fetch("/api/admin/invite-requests");
+    if (res.ok) {
+      const data = await res.json();
+      setRequests(data.requests ?? []);
+    }
+    setRequestsLoading(false);
+  }
+
+  async function actOnRequest(id: string, action: "approve" | "decline") {
+    setRequestBusy(id);
+    const res = await fetch("/api/admin/invite-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, action }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setRequests(prev => prev.map(r => r.id === id ? { ...r, status: data.status, invite_code: data.code ?? r.invite_code } : r));
+      // Keep the Codes tab in step, or saving there would wipe the new code
+      if (data.codes) setCodes(data.codes);
+    }
+    setRequestBusy(null);
+  }
+
+  function inviteMessage(code: string) {
+    const expiry = codes.find(c => c.code === code)?.expiresAt;
+    const link = `${window.location.origin}/signup?code=${code}`;
+    return [
+      "Hi,",
+      "",
+      "Thanks for asking to try ForeThought. You're in.",
+      "",
+      `Your personal invite link: ${link}`,
+      expiry ? `It's good until ${new Date(expiry).toLocaleDateString("en-US", { month: "long", day: "numeric" })}.` : "",
+      "",
+      "It works best on your phone. Open the link, create your account, and Frankie will take it from there. Take her to the range or out for a round.",
+      "",
+      "This is an early test, so if anything is confusing, broken or just annoying, reply to this email and tell me. That's the most useful thing you can do.",
+      "",
+      "Jeff",
+    ].filter((line, i, all) => !(line === "" && all[i - 1] === "")).join("\n");
+  }
+
+  async function copyInvite(id: string, code: string) {
+    await navigator.clipboard.writeText(inviteMessage(code));
+    setCopiedRequest(id);
+    setTimeout(() => setCopiedRequest(null), 2000);
+  }
+
+  const WANTS_LABELS: Record<string, string> = { practice: "Practice help", "on-course": "On-course help", both: "Both" };
+  const HANDICAP_LABELS: Record<string, string> = { "under-10": "Under 10", "10-18": "10 to 18", "19-28": "19 to 28", "29-plus": "29+", "no-idea": "No idea" };
 
   async function loadUsers() {
     setUsersLoading(true);
@@ -228,8 +290,8 @@ export default function AdminPage() {
       </header>
 
       {/* Tabs */}
-      <div className="flex border-b border-gray-800 shrink-0">
-        {([["users", "👥 Users"], ["prompt", "✏️ Prompt"], ["codes", "🔑 Codes"], ["news", "📢 News"], ["feedback", "💬 Feedback"], ["health", "🩺 Health"]] as [typeof tab, string][]).map(([key, label]) => (
+      <div className="flex border-b border-gray-800 shrink-0 overflow-x-auto whitespace-nowrap">
+        {([["users", "👥 Users"], ["requests", `📨 Requests${requests.filter(r => r.status === "pending").length ? ` (${requests.filter(r => r.status === "pending").length})` : ""}`], ["prompt", "✏️ Prompt"], ["codes", "🔑 Codes"], ["news", "📢 News"], ["feedback", "💬 Feedback"], ["health", "🩺 Health"]] as [typeof tab, string][]).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)}
             className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${tab === key ? "border-green-500 text-green-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>
             {label}
@@ -277,6 +339,72 @@ export default function AdminPage() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Requests Tab */}
+        {tab === "requests" && (
+          <div className="p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400">
+                  {requests.filter(r => r.status === "pending").length} waiting · {requests.filter(r => r.status === "approved").length} approved
+                </p>
+                <p className="text-xs text-gray-600 mt-0.5">Approve to create a personal code, then copy the invite and email it yourself.</p>
+              </div>
+              <button onClick={loadRequests} disabled={requestsLoading} className="text-xs text-gray-500 hover:text-gray-300">
+                {requestsLoading ? "Loading…" : "↻ Refresh"}
+              </button>
+            </div>
+
+            {!requestsLoading && requests.length === 0 && (
+              <p className="text-gray-600 text-sm">No requests yet. They&apos;ll appear here when someone fills in the form on the home page.</p>
+            )}
+
+            <div className="space-y-3">
+              {requests.map(r => (
+                <div key={r.id} className={`bg-gray-800 rounded-xl p-4 border ${r.status === "declined" ? "border-gray-800 opacity-50" : r.status === "approved" ? "border-green-800" : "border-gray-700"}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-medium text-white break-all">{r.email}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{formatDate(r.created_at)}</p>
+                    </div>
+                    <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${r.status === "approved" ? "bg-green-900 text-green-300" : r.status === "declined" ? "bg-gray-700 text-gray-400" : "bg-yellow-900 text-yellow-300"}`}>
+                      {r.status}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                    <div><p className="text-gray-500">Handicap</p><p className="text-gray-300">{r.handicap_range ? HANDICAP_LABELS[r.handicap_range] ?? r.handicap_range : "—"}</p></div>
+                    <div><p className="text-gray-500">Wants</p><p className="text-gray-300">{r.wants ? WANTS_LABELS[r.wants] ?? r.wants : "—"}</p></div>
+                    <div><p className="text-gray-500">Source</p><p className="text-gray-300">{r.source ?? "direct"}</p></div>
+                  </div>
+
+                  {r.status === "pending" && (
+                    <div className="flex gap-2 mt-4">
+                      <button onClick={() => actOnRequest(r.id, "approve")} disabled={requestBusy === r.id}
+                        className="flex-1 rounded-lg bg-green-600 hover:bg-green-500 disabled:opacity-50 px-3 py-2 text-white text-sm font-medium transition-colors">
+                        {requestBusy === r.id ? "Working…" : "Approve"}
+                      </button>
+                      <button onClick={() => actOnRequest(r.id, "decline")} disabled={requestBusy === r.id}
+                        className="rounded-lg border border-gray-700 hover:border-gray-500 disabled:opacity-50 px-3 py-2 text-gray-400 text-sm transition-colors">
+                        Decline
+                      </button>
+                    </div>
+                  )}
+
+                  {r.status === "approved" && r.invite_code && (
+                    <div className="mt-4 flex items-center justify-between gap-3">
+                      <span className="font-mono tracking-widest text-sm font-bold text-green-400">{r.invite_code}</span>
+                      <button onClick={() => copyInvite(r.id, r.invite_code!)}
+                        className="rounded-lg bg-gray-700 hover:bg-gray-600 px-3 py-2 text-white text-sm font-medium transition-colors">
+                        {copiedRequest === r.id ? "Copied ✓" : "Copy invite message"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

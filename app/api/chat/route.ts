@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
@@ -1626,13 +1626,14 @@ export async function POST(req: NextRequest) {
     const newMessageCount = messageCount + 2;
     const isHighSignal = /\b(remember|breakthrough|figured out|finally|clicking|nailed it|shot \d+|broke \d+|best round|worst round|discovered|realized)\b/i.test(message ?? "");
     if (!isGreeting && (newMessageCount % 4 === 0 || isHighSignal)) {
-      void updateAiNotes(
+      // after() keeps the function alive past the response; a bare call is dropped on Vercel
+      after(() => updateAiNotes(
         user.id,
         anthropic,
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         getEnvVar("SUPABASE_SERVICE_ROLE_KEY"),
         profile.ai_notes ?? null
-      );
+      ));
     }
 
     // Mark announcements as read after greeting delivery

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import fs from "fs";
 import path from "path";
+import { findValidCode, type InviteCode } from "@/lib/invites";
 
 function getEnvVar(name: string): string {
   const fromEnv = process.env[name];
@@ -14,10 +15,6 @@ function getEnvVar(name: string): string {
   return "";
 }
 
-type InviteCode = {
-  code: string;
-  expiresAt?: string | null; // ISO date string, null = never expires
-};
 
 export async function POST(req: NextRequest) {
   try {
@@ -39,17 +36,16 @@ export async function POST(req: NextRequest) {
     if (!data?.value) return NextResponse.json({ valid: false, reason: "No codes configured" });
 
     const codes: InviteCode[] = JSON.parse(data.value);
-    const now = new Date();
+    const result = findValidCode(codes, String(code));
 
-    const match = codes.find(c => c.code.toUpperCase() === code.toUpperCase());
-
-    if (!match) return NextResponse.json({ valid: false, reason: "Invalid code" });
-
-    if (match.expiresAt && new Date(match.expiresAt) < now) {
-      return NextResponse.json({ valid: false, reason: "This invite code has expired" });
+    if (!result.valid) {
+      return NextResponse.json({
+        valid: false,
+        reason: result.reason === "expired" ? "This invite code has expired" : "Invalid code",
+      });
     }
 
-    return NextResponse.json({ valid: true });
+    return NextResponse.json({ valid: true, source: result.match.source ?? null });
   } catch (err) {
     console.error("Invite validation error:", err);
     return NextResponse.json({ valid: false, reason: "Something went wrong" });
