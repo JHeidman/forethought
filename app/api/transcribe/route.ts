@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { createClient } from "@/lib/supabase/server";
 
 function getEnvVar(name: string): string {
   const fromEnv = process.env[name];
@@ -15,6 +16,10 @@ function getEnvVar(name: string): string {
 
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
     const formData = await req.formData();
     const audioFile = formData.get("audio") as File | null;
     if (!audioFile) return NextResponse.json({ error: "No audio" }, { status: 400 });

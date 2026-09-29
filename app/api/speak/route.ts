@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { createClient } from "@/lib/supabase/server";
 
 function getEnvVar(name: string): string {
   const fromEnv = process.env[name];
@@ -82,6 +83,10 @@ async function speakOpenAI(text: string, persona: string): Promise<Response | nu
 
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
     const { text, voiceId, tier, persona } = await req.json();
 
     if (!text?.trim()) {

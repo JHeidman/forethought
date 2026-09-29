@@ -13,6 +13,7 @@ type Profile = {
   frankie_prefs: string;
   persona: PersonaKey;
   goal: string;
+  instructor_guidance: string;
 };
 
 type Club = {
@@ -62,6 +63,7 @@ export default function ProfilePage() {
     frankie_prefs: "",
     persona: "frankie",
     goal: "",
+    instructor_guidance: "",
   });
   const [clubs, setClubs] = useState<Club[]>([]);
   const [editingClub, setEditingClub] = useState<string | null>(null);
@@ -123,6 +125,7 @@ export default function ProfilePage() {
           frankie_prefs: profileRes.data.frankie_prefs ?? "",
           persona: (profileRes.data.persona as PersonaKey) ?? "frankie",
           goal: profileRes.data.goal ?? "",
+          instructor_guidance: profileRes.data.instructor_guidance ?? "",
         });
         setAiNotes(profileRes.data.ai_notes ?? null);
       }
@@ -387,6 +390,16 @@ export default function ProfilePage() {
               className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-lg focus:outline-none focus:border-green-500"
               placeholder='e.g. "Break 90 by end of summer"' />
             <p className="text-xs text-gray-600 mt-1">Your caddy will keep this in mind and help you get there.</p>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">
+              From Your Instructor
+              <span className="ml-2 text-xs text-gray-600">What were you told to work on?</span>
+            </label>
+            <textarea value={profile.instructor_guidance} onChange={(e) => setProfile({ ...profile, instructor_guidance: e.target.value })}
+              rows={4} className="w-full rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-white text-base focus:outline-none focus:border-green-500 resize-none"
+              placeholder="e.g. keep the lead wrist flat at the top; pause drill, 20 reps before each session" />
+            <p className="text-xs text-gray-600 mt-1">Your caddy builds practice around this and updates it when you tell them about a lesson.</p>
           </div>
           <div>
             <label className="block text-sm text-gray-400 mb-1">

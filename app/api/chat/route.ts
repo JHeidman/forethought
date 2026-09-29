@@ -85,6 +85,7 @@ function buildSystemPrompt(
     gender?: string | null;
     age_bracket?: string | null;
     goal?: string | null;
+    instructor_guidance?: string | null;
   },
   context: {
     isGreeting: boolean;
@@ -201,6 +202,20 @@ This is what ${firstName} is working toward. Let it inform your coaching — con
     : `PLAYER GOAL: Not yet known.
 This is important context you're still missing. Within the first few sessions, explore what they're working toward. A good opener: "What would a great golf season look like for you?" Many players have a score they want to break — once you know their goal, everything you coach becomes more meaningful.`;
 
+  const instructorSection = profile.instructor_guidance
+    ? `INSTRUCTOR GUIDANCE — THIS OUTRANKS YOUR OWN SWING IDEAS:
+${firstName} works with a human instructor who has watched them swing in person. This is what the instructor told them:
+${profile.instructor_guidance}
+
+How to use it:
+- The instructor has seen what you cannot. Never contradict this guidance or offer a competing swing theory. If something the player describes seems to conflict with it, suggest they raise it at their next lesson.
+- Your job is to make the lesson stick: build practice plans around these points, use the instructor's own cues and wording, and keep ${firstName} from piling new tips on top.
+- When they report on a practice session or round, ask how the instructor's points felt before anything else.
+- If they bring up a tip from YouTube or a friend, relate it back to this guidance and say plainly if it would pull them away from it.
+- On the course, reduce this to a single swing thought at most. A round is not the place to rebuild a swing.
+- When they tell you about a new lesson, call save_instructor_guidance with the updated guidance.`
+    : `INSTRUCTOR: You don't know whether ${firstName} works with a human instructor. If they mention a lesson or a coach, take a real interest, ask what they were told to work on, and call save_instructor_guidance. Advice from someone who has watched them swing in person outranks your own swing ideas.`;
+
   const planContext = buildPlanContext(profile.goal ?? null, context.planIngredients, context.seasonPlan, firstName);
 
   return `${persona.personality}
@@ -222,6 +237,8 @@ Player profile:
 ${profile.frankie_prefs ? `\nPersonal preferences from this player: ${profile.frankie_prefs}` : ""}
 
 ${goalSection}
+
+${instructorSection}
 ${clubSection}
 ${context.scorecardContext ? `\n${context.scorecardContext}` : ""}
 ${relationshipContext ? `\n${relationshipContext}` : ""}
@@ -606,6 +623,18 @@ const savePlanTool: Anthropic.Tool = {
   },
 };
 
+const saveInstructorGuidanceTool: Anthropic.Tool = {
+  name: "save_instructor_guidance",
+  description: "Save what the player's human golf instructor told them to work on. Call this whenever the player describes a lesson or passes on advice from their instructor or coach — what was diagnosed, the feels or cues they were given, the drills assigned. Also call it when they report a follow-up lesson that changes the guidance. Write the COMPLETE current guidance every time: this replaces what was saved before, so carry forward anything from the existing guidance that still applies. If the player is vague, ask one clarifying question first, then save.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      guidance: { type: "string", description: "The instructor's current guidance, in short bullet points starting with '• '. Keep the instructor's own cues and wording where the player quoted them. Include the lesson date if known and the instructor's name if given." },
+    },
+    required: ["guidance"],
+  },
+};
+
 // Save season plan tool
 const saveSeasonPlanTool: Anthropic.Tool = {
   name: "save_season_plan",
@@ -898,7 +927,8 @@ export async function POST(req: NextRequest) {
     ]);
 
     let profile = profileResult.data ?? {};
-    const historyRaw = (historyResult.data ?? []).reverse();
+    // Blank messages are rejected by the API and would break every later turn
+    const historyRaw = (historyResult.data ?? []).filter(m => m.content?.trim()).reverse();
     const history = historyRaw.map(m => ({ role: m.role, content: m.content }));
     const messageCount = countResult.count ?? 0;
     const lastActiveAt = historyRaw.length > 0 ? historyRaw[historyRaw.length - 1].created_at : null;
@@ -1088,6 +1118,7 @@ export async function POST(req: NextRequest) {
 - GPS shot tracking: when playing a round, say the club you're using before you hit ("hitting my 7-iron") and I'll measure the distance automatically with GPS. After several rounds I'll build real averages and suggest yardage updates. Say "I shanked that" to exclude a shot.
 - Season planning: tell me a goal ("break 90 by August") and I'll build you a personalised season roadmap. Ask anytime or wait for me to offer when I've gathered enough. Saved plans are on the Plans page.
 - Club bag: your full bag is on the Profile page with distances, shaft flex, loft, and shot shape. Edit any club to give me better data for recommendations.
+- Lessons: if you take lessons, tell me what your instructor said and I'll build your practice around it and keep you on track between lessons.
 - Long-term memory: I take notes on your game automatically and remember them across sessions. You can see what I've learned on your Profile page.`;
 
     const finalSystemPrompt = [
@@ -1146,7 +1177,7 @@ export async function POST(req: NextRequest) {
       model: activeModel,
       max_tokens: 2048,
       system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-      tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+      tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, saveInstructorGuidanceTool, updateClubDistancesTool, markMishitTool, noteShotTool],
       messages: apiMessages,
     });
 
@@ -1195,7 +1226,7 @@ export async function POST(req: NextRequest) {
             model: activeModel,
             max_tokens: 512,
             system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-            tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+            tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, saveInstructorGuidanceTool, updateClubDistancesTool, markMishitTool, noteShotTool],
             tool_choice: { type: "none" },
             messages: [
               ...apiMessages,
@@ -1243,7 +1274,7 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 1024,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, saveInstructorGuidanceTool, updateClubDistancesTool, markMishitTool, noteShotTool],
           tool_choice: { type: "none" },
           messages: [
             ...apiMessages,
@@ -1281,7 +1312,8 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 1024,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, saveInstructorGuidanceTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tool_choice: { type: "none" },
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1332,7 +1364,8 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 512,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, saveInstructorGuidanceTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tool_choice: { type: "none" },
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1341,6 +1374,40 @@ export async function POST(req: NextRequest) {
                 type: "tool_result",
                 tool_use_id: toolBlock.id,
                 content: "Season plan saved successfully.",
+              }],
+            },
+          ],
+        });
+
+        reply = followUp.content.find((b) => b.type === "text")?.type === "text"
+          ? (followUp.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
+          : "";
+
+      } else if (toolBlock && toolBlock.type === "tool_use" && toolBlock.name === "save_instructor_guidance") {
+        const input = toolBlock.input as { guidance: string };
+
+        const { error: guidanceErr } = await supabase.from("profiles").update({
+          instructor_guidance: input.guidance,
+          updated_at: new Date().toISOString(),
+        }).eq("id", user.id);
+        if (guidanceErr) console.error("instructor_guidance update error:", guidanceErr);
+
+        const followUp = await anthropic.messages.create({
+          model: activeModel,
+          max_tokens: 512,
+          system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, saveInstructorGuidanceTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tool_choice: { type: "none" },
+          messages: [
+            ...apiMessages,
+            { role: "assistant", content: response.content },
+            {
+              role: "user", content: [{
+                type: "tool_result",
+                tool_use_id: toolBlock.id,
+                content: guidanceErr
+                  ? "Could not save. Tell the player you had trouble writing that down and ask them to repeat it shortly."
+                  : "Saved. From now on this guidance is your top coaching priority for this player.",
               }],
             },
           ],
@@ -1367,7 +1434,8 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, saveInstructorGuidanceTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tool_choice: { type: "none" },
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1408,7 +1476,8 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, saveInstructorGuidanceTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tool_choice: { type: "none" },
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1451,7 +1520,8 @@ export async function POST(req: NextRequest) {
           model: activeModel,
           max_tokens: 256,
           system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
-          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, saveInstructorGuidanceTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+          tool_choice: { type: "none" },
           messages: [
             ...apiMessages,
             { role: "assistant", content: response.content },
@@ -1473,6 +1543,20 @@ export async function POST(req: NextRequest) {
       reply = response.content.find((b) => b.type === "text")?.type === "text"
         ? (response.content.find((b) => b.type === "text") as Anthropic.TextBlock).text
         : "";
+    }
+
+    if (!reply.trim()) {
+      console.error("Empty reply from model — retrying without tools. stop_reason:", response.stop_reason);
+      const retry = await anthropic.messages.create({
+        model: activeModel,
+        max_tokens: 1024,
+        system: [{ type: "text", text: finalSystemPrompt, cache_control: { type: "ephemeral" } }],
+        tools: [reportPersonaGapTool, submitSuggestionTool, searchWebTool, lookupCourseTool, savePlanTool, saveSeasonPlanTool, saveInstructorGuidanceTool, updateClubDistancesTool, markMishitTool, noteShotTool],
+        tool_choice: { type: "none" },
+        messages: apiMessages,
+      });
+      const retryText = retry.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text ?? "";
+      reply = retryText.trim() ? retryText : "Sorry, I lost my train of thought for a second. Say that again?";
     }
 
     // On-course: speak the full reply (responses are kept short by the system prompt)
